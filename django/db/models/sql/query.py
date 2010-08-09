@@ -120,7 +120,7 @@ class Query(object):
         self.used_aliases = set()
         self.filter_is_sticky = False
         self.included_inherited_models = {}
-
+        self.manual_joins = {}
         # SQL-related attributes
         self.select = []
         self.tables = []    # Aliases in the order they are created.
@@ -156,7 +156,80 @@ class Query(object):
         # are the fields to defer, or False if these are the only fields to
         # load.
         self.deferred_loading = (set(), True)
+    
+    def do_join(self, name, qs, allow_null):
+        # Hmmh, I think my error checking could be a bit better. Maybe.
+        # This does not actually work...
+        # assert name not in self.model._meta.get_all_field_names(), \
+        #    "Reserved name."
+        assert name not in self.manual_joins, \
+            "Already joined a queryset with name %s." % name
+        lhs_table = self.model._meta.db_table 
+        must_relabel = qs.model._meta.db_table in self.tables
+        self.get_initial_alias()
+        alias = self.join((lhs_table, qs.model._meta.db_table, None, None), True, {}, False, allow_null, True, False, qs.query.where, allow_null=allow_null)
+        if must_relabel:
+            change_map = {qs.model._meta.db_table: alias}
+            qs.query.where.relabel_aliases(change_map)
+        if name is not None:
+            self.manual_joins[name] = (qs.model, alias)
+        if qs.query.manual_joins:
+            # Need it to be the original queryset.
+            # We should transfer these to upper level. How to do that?
+            pass
+        #else:
+        #    self.hidden_manual_joins.append((qs.model, alias))
+        orig_alias = alias
+        opts = qs.query.model._meta
+        for (name, (model, or_alias)) in qs.query.manual_joins.iteritems():
+            where = qs.query.rev_join_map[or_alias][4]
+            allow_null = allow_null or (qs.query.alias_map[or_alias][JOIN_TYPE] == self.LOUTER)
+            alias = self.join((opts.db_table, model._meta.db_table, None, None),
+                              True, {}, False, allow_null, True, False, where, allow_null=allow_null)
+            change_map = {opts.db_table: orig_alias, or_alias: alias}
+            where.relabel_aliases(change_map)
+            self.manual_joins[name] = (model, alias)     
+    
+    def do_m2m_join(self, name, qs, allow_null, rel_field):
+        # need to construct manual where clause for the first join.
+        # How does m2m_filtering handle this?
+        # Should use join cache, create a new method, maybe?
+        opts = qs.query.model._meta
+        table1 = rel_field.m2m_db_table()
+        from_col1 = opts.pk.column
+        to_col1 = rel_field.m2m_column_name()
+        table2 = opts.db_table
+        from_col2 = rel_field.m2m_reverse_name()
+        to_col2 = opts.pk.column
+        must_relabel = qs.model._meta.db_table in self.tables
+        alias = self.get_initial_alias()
+        int_alias = self.join((alias, table1, from_col1, to_col1),
+                False, [], nullable=allow_null,
+                reuse=False)
+        if int_alias == table2 and from_col2 == to_col2:
+            alias = int_alias
+        else:
+            alias = self.join(
+                    (int_alias, table2, from_col2, to_col2),
+                    False, [], nullable=True,
+                    reuse=False, where=qs.query.where)
+        if must_relabel:
+            change_map = {qs.model._meta.db_table: alias}
+            qs.query.where.relabel_aliases(change_map)
+        self.manual_joins[name] = (qs.model, alias)
+        orig_alias = alias
 
+        for (name, (model, or_alias)) in qs.query.manual_joins.iteritems():
+            where = qs.query.rev_join_map[or_alias][4]
+            allow_null = allow_null or (qs.query.alias_map[or_alias][JOIN_TYPE] == self.LOUTER)
+            alias = self.join((opts.db_table, model._meta.db_table, None, None),
+                              True, {}, False, allow_null, True, False, where, allow_null=allow_null)
+            change_map = {opts.db_table: orig_alias, or_alias: alias}
+            where.relabel_aliases(change_map)
+            self.manual_joins[name] = (model, alias)    
+        
+        
+    
     def __str__(self):
         """
         Returns the query as a string of SQL with the parameter values
@@ -167,7 +240,8 @@ class Query(object):
         """
         sql, params = self.get_compiler(DEFAULT_DB_ALIAS).as_sql()
         return sql % params
-
+    
+    
     def __deepcopy__(self, memo):
         result = self.clone(memo=memo)
         memo[id(self)] = result
@@ -244,6 +318,7 @@ class Query(object):
         obj.standard_ordering = self.standard_ordering
         obj.included_inherited_models = self.included_inherited_models.copy()
         obj.ordering_aliases = []
+        obj.manual_joins = self.manual_joins.copy()
         obj.select_fields = self.select_fields[:]
         obj.related_select_fields = self.related_select_fields[:]
         obj.dupe_avoidance = self.dupe_avoidance.copy()
@@ -431,7 +506,12 @@ class Query(object):
                 "Cannot combine queries once a slice has been taken."
         assert self.distinct == rhs.distinct, \
             "Cannot combine a unique query with a non-unique query."
-
+        assert len(self.manual_joins) == 0 and len(rhs.manual_joins) == 0, \
+            "Combining queries with manual joins not supported yet."  
+        
+        # if len(self.manual_joins) == 0:
+        #    self.manual_joins = rhs.manual_joins
+        
         self.remove_inherited_models()
         # Work out how to relabel the rhs aliases, if necessary.
         change_map = {}
@@ -443,8 +523,8 @@ class Query(object):
                 # An unused alias.
                 continue
             promote = (rhs.alias_map[alias][JOIN_TYPE] == self.LOUTER)
-            new_alias = self.join(rhs.rev_join_map[alias],
-                    (conjunction and not first), used, promote, not conjunction)
+            new_alias = self.join(rhs.rev_join_map[alias][0:4],
+                    (conjunction and not first), used, promote, not conjunction, where=rhs.rev_join_map[alias][4])
             used.add(new_alias)
             change_map[alias] = new_alias
             first = False
@@ -645,6 +725,9 @@ class Query(object):
         """
         if ((unconditional or self.alias_map[alias][NULLABLE]) and
                 self.alias_map[alias][JOIN_TYPE] != self.LOUTER):
+            
+            if alias in self.manual_joins:
+                return unconditional
             data = list(self.alias_map[alias])
             data[JOIN_TYPE] = self.LOUTER
             self.alias_map[alias] = tuple(data)
@@ -786,7 +869,7 @@ class Query(object):
         return len([1 for count in self.alias_refcount.itervalues() if count])
 
     def join(self, connection, always_create=False, exclusions=(),
-            promote=False, outer_if_first=False, nullable=False, reuse=None):
+            promote=False, outer_if_first=False, nullable=False, reuse=None, where=None, allow_null=True):
         """
         Returns an alias for the join in 'connection', either reusing an
         existing alias for that join or creating a new one. 'connection' is a
@@ -795,7 +878,11 @@ class Query(object):
         of::
 
             lhs.lhs_col = table.col
-
+        
+        If where is not None, then the clause in where will be used for the join
+        instead of the lhs_col, col in the connection.
+        
+        
         If 'always_create' is True and 'reuse' is None, a new alias is always
         created, regardless of whether one already exists or not. If
         'always_create' is True and 'reuse' is a set, an alias in 'reuse' that
@@ -829,7 +916,7 @@ class Query(object):
             # reusable set, minus exclusions, for this table".
             exclusions = set(self.table_map[table]).difference(reuse).union(set(exclusions))
             always_create = False
-        t_ident = (lhs_table, table, lhs_col, col)
+        t_ident = (lhs_table, table, lhs_col, col, where)
         if not always_create:
             for alias in self.join_map.get(t_ident, ()):
                 if alias not in exclusions:
@@ -846,15 +933,18 @@ class Query(object):
 
         # No reuse is possible, so we need a new alias.
         alias, _ = self.table_alias(table, True)
+        
         if not lhs:
             # Not all tables need to be joined to anything. No join type
             # means the later columns are ignored.
             join_type = None
-        elif promote or outer_if_first:
+        elif allow_null and (promote or outer_if_first or self.alias_map[lhs][2] == self.LOUTER):
+            # last check: if the lhs table is left outer joined, then so should this table
+            # also. 
             join_type = self.LOUTER
         else:
             join_type = self.INNER
-        join = (table, alias, join_type, lhs, lhs_col, col, nullable)
+        join = (table, alias, join_type, lhs, lhs_col, col, nullable, where)
         self.alias_map[alias] = join
         if t_ident in self.join_map:
             self.join_map[t_ident] += (alias,)
@@ -978,6 +1068,7 @@ class Query(object):
         joining process will be processed. This parameter is set to False
         during the processing of extra filters to avoid infinite recursion.
         """
+
         arg, value = filter_expr
         parts = arg.split(LOOKUP_SEP)
         if not parts:
@@ -1015,9 +1106,13 @@ class Query(object):
                     entry.negate()
                 self.having.add(entry, AND)
                 return
-
-        opts = self.get_meta()
-        alias = self.get_initial_alias()
+        if parts[0] in self.manual_joins:
+            (model, alias) = self.manual_joins[parts[0]]
+            opts = model._meta
+            parts = parts[1:]
+        else:
+            opts = self.get_meta()
+            alias = self.get_initial_alias()
         allow_many = trim or not negate
 
         try:
@@ -1105,6 +1200,7 @@ class Query(object):
 
         Can also be used to add anything that has an 'add_to_query()' method.
         """
+        
         if used_aliases is None:
             used_aliases = self.used_aliases
         if hasattr(q_object, 'add_to_query'):

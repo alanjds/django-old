@@ -12,6 +12,9 @@ from django.db.models.query_utils import Q, select_related_descend, CollectedObj
 from django.db.models import signals, sql
 from django.utils.copycompat import deepcopy
 
+from django.db.models.expressions import R
+from inspect import isclass
+
 # Used to control how many objects are worked with at once in some cases (e.g.
 # when deleting objects).
 CHUNK_SIZE = 100
@@ -266,23 +269,55 @@ class QuerySet(object):
             model_cls = deferred_class_factory(self.model, skip)
 
         compiler = self.query.get_compiler(using=self.db)
+        orig_aggregate_start = aggregate_start
+
         for row in compiler.results_iter():
+            aggregate_start = orig_aggregate_start
+            offset = len(aggregate_select)
             if fill_cache:
                 obj, _ = get_cached_row(self.model, row,
                             index_start, using=self.db, max_depth=max_depth,
                             requested=requested, offset=len(aggregate_select),
-                            only_load=only_load)
+                            only_load=only_load, manual_joins=self.query.manual_joins)
             else:
                 if skip:
                     row_data = row[index_start:aggregate_start]
                     pk_val = row_data[pk_idx]
                     obj = model_cls(**dict(zip(init_list, row_data)))
+                    index_end = aggregate_start                  
+                    for (name, (model, _)) in self.query.manual_joins.iteritems():
+                        klass = model
+                        field_count = len(klass._meta.fields)
+                        fields = row[index_end + offset: index_end + field_count + offset]
+                        if fields == (None,) * field_count:
+                            rel_obj = None
+                        else:
+                            rel_obj = klass(*fields)
+                        if obj is not None:
+                            setattr(obj, name, rel_obj)
+                        index_end += field_count
                 else:
                     # Omit aggregates in object creation.
                     obj = self.model(*row[index_start:aggregate_start])
-
+                    index_end = aggregate_start
+                    for (name, (model, _)) in self.query.manual_joins.iteritems():
+                        klass = model
+                        field_count = len(klass._meta.fields)
+                        fields = row[index_end + offset: index_end + field_count + offset]
+                        if fields == (None,) * field_count:
+                            rel_obj = None
+                        else:
+                            rel_obj = klass(*fields)
+                        if obj is not None:
+                            setattr(obj, name, rel_obj)
+                        index_end += field_count
+                
                 # Store the source database of the object
                 obj._state.db = self.db
+                aggregate_start = index_end
+            
+            aggregate_start = orig_aggregate_start
+
 
             for i, k in enumerate(extra_select):
                 setattr(obj, k, row[i])
@@ -707,7 +742,39 @@ class QuerySet(object):
         clone = self._clone()
         clone._db = alias
         return clone
-
+    
+    def join(self, model_or_qs, name, additional_filters=None, through=None, allow_null=False):
+        """
+        Do a left or inner join and fetch the resulting object in base_model.name.
+        If there is more than one row matching the join, then each result row will
+        be returned in different objects.
+        """
+        clone = self._clone()
+        if isinstance(model_or_qs, QuerySet):
+            qs = model_or_qs
+        else:
+            assert through is not None, 'through=None not supported'
+            qs = model_or_qs.objects.all()
+            rel_field = model_or_qs._meta.get_field_by_name(through)[0]            
+            # Avoid circular import, there is probably a better way to do this...
+            from django.db.models.fields.related import ForeignKey, ManyToManyField
+            if isinstance(rel_field, ForeignKey):
+                # Wrong check, should check the base chain contains the model or something...
+                assert rel_field.rel.to == self.model
+                qs = qs.filter(**{'%s' % through: R('%s__%s' % (through, rel_field.rel.field_name))})
+            elif isinstance(rel_field, ManyToManyField):
+                if additional_filters is not None:
+                    qs = qs.filter(additional_filters)
+                clone.query.do_m2m_join(name, qs, allow_null, rel_field)
+                return clone
+        assert (not qs.model._meta.parents or allow_null == False), "Can not use allow_null with inherited models"
+        if additional_filters is not None:
+            qs = qs.filter(additional_filters)
+        clone.query.do_join(name, qs, allow_null)
+        return clone
+        
+         
+    
     ###################################
     # PUBLIC INTROSPECTION ATTRIBUTES #
     ###################################
@@ -1118,7 +1185,7 @@ class EmptyQuerySet(QuerySet):
 
 
 def get_cached_row(klass, row, index_start, using, max_depth=0, cur_depth=0,
-                   requested=None, offset=0, only_load=None, local_only=False):
+                   requested=None, offset=0, only_load=None, local_only=False, manual_joins={}):
     """
     Helper function that recursively returns an object with the specified
     related attributes already populated.
@@ -1212,6 +1279,19 @@ def get_cached_row(klass, row, index_start, using, max_depth=0, cur_depth=0,
         obj._state.db = using
 
     index_end = index_start + field_count + offset
+    # Fetch the manual_join objs in the first iteration
+    for (name, (model, _)) in manual_joins.iteritems():
+        klass = model
+        field_count = len(klass._meta.fields)
+        fields = row[index_end : index_end + field_count]
+        if fields == (None,) * field_count:
+            rel_obj = None
+        else:
+            rel_obj = klass(*fields)
+        if obj is not None:
+            setattr(obj, name, rel_obj)
+        index_end += field_count
+
     # Iterate over each related object, populating any
     # select_related() fields
     for f in klass._meta.fields:

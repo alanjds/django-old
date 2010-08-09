@@ -111,3 +111,13 @@ class F(ExpressionNode):
 
     def evaluate(self, evaluator, qn, connection):
         return evaluator.evaluate_leaf(self, qn, connection)
+ 
+class R(F):
+    """
+    Needed for join queries. In these queries we do not want to trim
+    joins.
+    """
+    def prepare(self, evaluator, query, allow_joins):
+        return evaluator.prepare_leaf(self, query, allow_joins, trim_joins=False)
+
+    

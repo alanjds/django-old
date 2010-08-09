@@ -1,6 +1,8 @@
 from django.core.exceptions import FieldError
 from django.db.models.fields import FieldDoesNotExist
-from django.db.models.sql.constants import LOOKUP_SEP
+from django.db.models.sql.constants import LOOKUP_SEP, JOIN_TYPE
+from django.db.models.sql.where import Constraint
+
 
 class SQLEvaluator(object):
     def __init__(self, expression, query, allow_joins=True):
@@ -30,7 +32,7 @@ class SQLEvaluator(object):
             if hasattr(child, 'prepare'):
                 child.prepare(self, query, allow_joins)
 
-    def prepare_leaf(self, node, query, allow_joins):
+    def prepare_leaf(self, node, query, allow_joins, trim_joins=True):
         if not allow_joins and LOOKUP_SEP in node.name:
             raise FieldError("Joined field references are not permitted in this query")
 
@@ -40,12 +42,20 @@ class SQLEvaluator(object):
             self.contains_aggregate = True
             self.cols[node] = query.aggregate_select[node.name]
         else:
+            if field_list[0] in query.manual_joins:
+                (model, alias) = query.manual_joins[field_list[0]]
+                opts = model._meta
+                field_list = field_list[1:]
+            else:
+                (opts, alias) = (query.get_meta(), query.get_initial_alias())
             try:
                 field, source, opts, join_list, last, _ = query.setup_joins(
-                    field_list, query.get_meta(),
-                    query.get_initial_alias(), False)
-                col, _, join_list = query.trim_joins(source, join_list, last, False)
-
+                    field_list, opts,
+                    alias, False)
+                if trim_joins:
+                    col, _, join_list = query.trim_joins(source, join_list, last, False)
+                else:
+                    col = source.column
                 self.cols[node] = (join_list[-1], col)
             except FieldDoesNotExist:
                 raise FieldError("Cannot resolve keyword %r into field. "

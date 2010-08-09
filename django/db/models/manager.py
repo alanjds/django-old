@@ -109,7 +109,7 @@ class Manager(object):
         to easily customize the behavior of the Manager.
         """
         return QuerySet(self.model, using=self._db)
-
+    
     def none(self):
         return self.get_empty_query_set()
 

@@ -179,7 +179,7 @@ class SQLCompiler(object):
                     if hasattr(col, 'alias'):
                         aliases.add(col.alias)
                         col_aliases.add(col.alias)
-
+            
         elif self.query.default_cols:
             cols, new_aliases = self.get_default_columns(with_aliases,
                     col_aliases)
@@ -208,6 +208,22 @@ class SQLCompiler(object):
                 result.append(r)
                 aliases.add(r)
                 col_aliases.add(col)
+
+        for (model, alias) in self.query.manual_joins.itervalues():
+            # Should probably populate a dictionary like related_select_cols
+            # somewhere else and use that here.
+            col_list, aliases = self.get_default_columns(with_aliases, col_aliases, start_alias=alias, opts=model._meta, as_pairs=True)
+            for table_alias, col_name in col_list:
+                r = '%s.%s' % (qn(table_alias), qn(col_name))
+                if with_aliases and col_name in col_aliases:
+                    c_alias = 'Col%d' % len(col_aliases)
+                    result.append('%s AS %s' %(r, c_alias))
+                    aliases.add(c_alias)
+                    col_aliases.add(c_alias)
+                else:
+                    result.append(r)
+                    aliases.add(r)
+                    col_aliases.add(col_name)
 
         self._select_aliases = aliases
         return result
@@ -430,20 +446,32 @@ class SQLCompiler(object):
         qn = self.quote_name_unless_alias
         qn2 = self.connection.ops.quote_name
         first = True
+        where_params = []
         for alias in self.query.tables:
             if not self.query.alias_refcount[alias]:
                 continue
-            try:
-                name, alias, join_type, lhs, lhs_col, col, nullable = self.query.alias_map[alias]
+            try:                
+                name, alias, join_type, lhs, lhs_col, col, nullable, where = self.query.alias_map[alias]
             except KeyError:
                 # Extra tables can end up in self.tables, but not in the
                 # alias_map if they aren't in a join. That's OK. We skip them.
                 continue
             alias_str = (alias != name and ' %s' % alias or '')
             if join_type and not first:
-                result.append('%s %s%s ON (%s.%s = %s.%s)'
-                        % (join_type, qn(name), alias_str, qn(lhs),
-                           qn2(lhs_col), qn(alias), qn2(col)))
+                if where is not None and lhs_col is not None:
+                    where, params = where.as_sql(qn=qn, connection=self.connection)
+                    where_params += params
+                    result.append('%s %s%s on (%s.%s= %s.%s AND %s)'
+                            % (join_type, qn(name), alias_str, qn(lhs), qn2(lhs_col), qn(alias), qn2(col), where))
+                elif where is not None:
+                    where, params = where.as_sql(qn=qn, connection=self.connection)
+                    where_params += params
+                    result.append('%s %s%s ON (%s)'
+                            % (join_type, qn(name), alias_str, where))
+                else:
+                    result.append('%s %s%s ON (%s.%s = %s.%s)'
+                            % (join_type, qn(name), alias_str, qn(lhs),
+                              qn2(lhs_col), qn(alias), qn2(col)))
             else:
                 connector = not first and ', ' or ''
                 result.append('%s%s%s' % (connector, qn(name), alias_str))
@@ -457,7 +485,7 @@ class SQLCompiler(object):
                 connector = not first and ', ' or ''
                 result.append('%s%s' % (connector, qn(alias)))
                 first = False
-        return result, []
+        return result, where_params
 
     def get_grouping(self):
         """

@@ -1249,6 +1249,49 @@ then the latter will get precedence.
 <option value="w">whiz</option>
 </select></li>
 
+# Bound field values ##########################################################
+
+It's possible to get to the value which would be used for rendering the widget
+for a field by using the BoundField's value attribute.
+
+>>> class UserRegistration(Form):
+...    username = CharField(max_length=10, initial='djangonaut')
+...    password = CharField(widget=PasswordInput)
+...    gender = ChoiceField(choices=(('M', 'Male'), ('F', 'Female')))
+...    role = ChoiceField(choices=(('user', 'Site user'), ('admin', 'Site admin')), initial='user')
+>>> p = UserRegistration({'password': 'foo', 'gender': 'M'})
+>>> print 'username.value =', p['username'].value
+username.value = 
+>>> print 'username.display_value =', p['username'].display_value
+username.display_value = 
+>>> print 'username.data = ', p['username'].data
+username.data = None
+>>> print 'password.value =', p['password'].value
+password.value = foo
+>>> print 'password.display_value =', p['password'].display_value
+password.display_value = foo
+>>> print 'password.data =', p['password'].data
+password.data = foo
+>>> print 'gender.value =', p['gender'].value
+gender.value = M
+>>> print 'gender.display_value =', p['gender'].display_value
+gender.display_value = Male
+>>> print 'gender.data =', p['gender'].data
+gender.data = M
+>>> print 'role.value =', p['role'].value
+role.value = 
+>>> print 'role.display_value =', p['role'].display_value
+role.display_value = 
+>>> print 'role.data =', p['role'].data
+role.data = None
+
+The value of username is empty because the form is bound -- the value wasn't
+specified, and so is empty. This differs if the form were to be unbound:
+
+>>> p = UserRegistration()
+>>> print p['username'].value
+djangonaut
+
 # Help text ###################################################################
 
 You can specify descriptive text for a field by using the 'help_text' argument

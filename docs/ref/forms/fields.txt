@@ -283,6 +283,37 @@ See the :ref:`format localization <format-localization>` documentation for
 more information.
 
 
+Field data versus value
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. versionadded:: 1.3
+
+.. attribute:: Field.value
+.. attribute:: Field.data
+
+Sometimes, it's necessary -- or at least easier -- to render the form entirely
+on your own. In such a case, you might want to get to what Django's form
+rendering would use for the HTML `value` attribute.
+
+It's quite easy, actually::
+
+    >>> f = CommentForm({'comment': 'Foobar'}, initial={'name': 'instance'})
+    >>> f['name'].value
+    'instance'
+    >>> f['comment'].value
+    'Foobar'
+
+The value attribute takes initial data into account on form level (i.e.,
+passing it to the initializer as seen in previous section), as well as field
+level.
+
+The resolution process is, step by step, the following:
+
+ 1. If the form has data for this field, use it;
+ 2. if the form has initial data for this field, use it;
+ 3. if the field has initial data, use it; and lastly
+ 4. use the empty string.
+
 Built-in ``Field`` classes
 --------------------------
 

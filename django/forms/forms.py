@@ -9,7 +9,7 @@ from django.utils.html import conditional_escape
 from django.utils.encoding import StrAndUnicode, smart_unicode, force_unicode
 from django.utils.safestring import mark_safe
 
-from fields import Field, FileField
+from fields import Field, FileField, ChoiceField
 from widgets import Media, media_property, TextInput, Textarea
 from util import flatatt, ErrorDict, ErrorList
 
@@ -430,20 +430,11 @@ class BoundField(StrAndUnicode):
                 attrs['id'] = auto_id
             else:
                 attrs['id'] = self.html_initial_id
-        if not self.form.is_bound:
-            data = self.form.initial.get(self.name, self.field.initial)
-            if callable(data):
-                data = data()
-        else:
-            if isinstance(self.field, FileField) and self.data is None:
-                data = self.form.initial.get(self.name, self.field.initial)
-            else:
-                data = self.data
         if not only_initial:
             name = self.html_name
         else:
             name = self.html_initial_name
-        return widget.render(name, data, attrs=attrs)
+        return widget.render(name, self.value, attrs=attrs)
 
     def as_text(self, attrs=None, **kwargs):
         """
@@ -467,6 +458,42 @@ class BoundField(StrAndUnicode):
         """
         return self.field.widget.value_from_datadict(self.form.data, self.form.files, self.html_name)
     data = property(_data)
+
+    def _value(self):
+        """
+        Returns the value for this BoundField, as rendered in widgets.
+        """
+        if not self.form.is_bound:
+            val = self.form.initial.get(self.name, self.field.initial)
+            if callable(val):
+                val = val()
+        else:
+            if isinstance(self.field, FileField) and self.data is None:
+                val = self.form.initial.get(self.name, self.field.initial)
+            else:
+                val = self.data
+        if val is None:
+            val = ''
+        return val
+    value = property(_value)
+
+    def _display_value(self):
+        """
+        Returns the displayed value for this BoundField, as rendered in widgets.
+        """
+        value = self.value
+        try:
+            return self.field.widget.display_value(self.html_name, value)
+        except NotImplementedError:
+            return value
+        """
+        if isinstance(self.field, ChoiceField):
+            for (val, desc) in self.field.choices:
+                if val == value:
+                    return desc
+        return self.value
+        """
+    display_value = property(_display_value)
 
     def label_tag(self, contents=None, attrs=None):
         """

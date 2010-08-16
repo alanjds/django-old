@@ -813,7 +813,11 @@ def filesizeformat(bytes):
         return ugettext("%.1f KB") % (bytes / 1024)
     if bytes < 1024 * 1024 * 1024:
         return ugettext("%.1f MB") % (bytes / (1024 * 1024))
-    return ugettext("%.1f GB") % (bytes / (1024 * 1024 * 1024))
+    if bytes < 1024 * 1024 * 1024 * 1024:
+        return ugettext("%.1f GB") % (bytes / (1024 * 1024 * 1024))
+    if bytes < 1024 * 1024 * 1024 * 1024 * 1024:
+        return ugettext("%.1f TB") % (bytes / (1024 * 1024 * 1024 * 1024))
+    return ugettext("%.1f PB") % (bytes / (1024 * 1024 * 1024 * 1024 * 1024))
 filesizeformat.is_safe = True
 
 def pluralize(value, arg=u's'):

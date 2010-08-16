@@ -510,24 +510,25 @@ class Select(Widget):
         output.append(u'</select>')
         return mark_safe(u'\n'.join(output))
 
+    def render_option(self, selected_choices, option_value, option_label):
+        option_value = force_unicode(option_value)
+        selected_html = (option_value in selected_choices) and u' selected="selected"' or ''
+        return u'<option value="%s"%s>%s</option>' % (
+            escape(option_value), selected_html,
+            conditional_escape(force_unicode(option_label)))
+
     def render_options(self, choices, selected_choices):
-        def render_option(option_value, option_label):
-            option_value = force_unicode(option_value)
-            selected_html = (option_value in selected_choices) and u' selected="selected"' or ''
-            return u'<option value="%s"%s>%s</option>' % (
-                escape(option_value), selected_html,
-                conditional_escape(force_unicode(option_label)))
-        # Normalize to strings. # TODO: what is this for?
+        # Normalize to strings.
         selected_choices = set([force_unicode(v) for v in selected_choices])
         output = []
         for option_value, option_label in chain(self.choices, choices):
             if isinstance(option_label, (list, tuple)):
                 output.append(u'<optgroup label="%s">' % escape(force_unicode(option_value)))
                 for option in option_label:
-                    output.append(render_option(*option))
+                    output.append(self.render_option(selected_choices, *option))
                 output.append(u'</optgroup>')
             else:
-                output.append(render_option(option_value, option_label))
+                output.append(self.render_option(selected_choices, option_value, option_label))
         return u'\n'.join(output)
     
     def display_value(self, name, value, attrs=None, choices=()):

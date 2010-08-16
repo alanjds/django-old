@@ -10,8 +10,8 @@ from django.core.cache.backends.base import BaseCache
 from django.utils.synch import RWLock
 
 class CacheClass(BaseCache):
-    def __init__(self, _, params):
-        BaseCache.__init__(self, params)
+    def __init__(self, _, params, key_prefix):
+        BaseCache.__init__(self, params, key_prefix='')
         self._cache = {}
         self._expire_info = {}
 
@@ -30,6 +30,7 @@ class CacheClass(BaseCache):
         self._lock = RWLock()
 
     def add(self, key, value, timeout=None):
+        key = self.make_key(key)
         self._lock.writer_enters()
         try:
             exp = self._expire_info.get(key)
@@ -44,6 +45,7 @@ class CacheClass(BaseCache):
             self._lock.writer_leaves()
 
     def get(self, key, default=None):
+        key = self.make_key(key)
         self._lock.reader_enters()
         try:
             exp = self._expire_info.get(key)
@@ -76,6 +78,7 @@ class CacheClass(BaseCache):
         self._expire_info[key] = time.time() + timeout
 
     def set(self, key, value, timeout=None):
+        key = self.make_key(key)
         self._lock.writer_enters()
         # Python 2.4 doesn't allow combined try-except-finally blocks.
         try:
@@ -87,6 +90,7 @@ class CacheClass(BaseCache):
             self._lock.writer_leaves()
 
     def has_key(self, key):
+        key = self.make_key(key)
         self._lock.reader_enters()
         try:
             exp = self._expire_info.get(key)
@@ -127,6 +131,7 @@ class CacheClass(BaseCache):
             pass
 
     def delete(self, key):
+        key = self.make_key(key)
         self._lock.writer_enters()
         try:
             self._delete(key)

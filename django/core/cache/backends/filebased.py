@@ -12,8 +12,8 @@ from django.core.cache.backends.base import BaseCache
 from django.utils.hashcompat import md5_constructor
 
 class CacheClass(BaseCache):
-    def __init__(self, dir, params):
-        BaseCache.__init__(self, params)
+    def __init__(self, dir, params, key_prefix=''):
+        BaseCache.__init__(self, params, key_prefix)
 
         max_entries = params.get('max_entries', 300)
         try:
@@ -32,6 +32,7 @@ class CacheClass(BaseCache):
             self._createdir()
 
     def add(self, key, value, timeout=None):
+        key = self.make_key(key)
         if self.has_key(key):
             return False
 
@@ -39,6 +40,7 @@ class CacheClass(BaseCache):
         return True
 
     def get(self, key, default=None):
+        key = self.make_key(key)
         fname = self._key_to_file(key)
         try:
             f = open(fname, 'rb')
@@ -56,6 +58,7 @@ class CacheClass(BaseCache):
         return default
 
     def set(self, key, value, timeout=None):
+        key = self.make_key(key)
         fname = self._key_to_file(key)
         dirname = os.path.dirname(fname)
 
@@ -79,6 +82,7 @@ class CacheClass(BaseCache):
             pass
 
     def delete(self, key):
+        key = self.make_key(key)
         try:
             self._delete(self._key_to_file(key))
         except (IOError, OSError):
@@ -95,6 +99,7 @@ class CacheClass(BaseCache):
             pass
 
     def has_key(self, key):
+        key = self.make_key(key)
         fname = self._key_to_file(key)
         try:
             f = open(fname, 'rb')
@@ -148,7 +153,8 @@ class CacheClass(BaseCache):
         Thus, a cache key of "foo" gets turnned into a file named
         ``{cache-dir}ac/bd/18db4cc2f85cedef654fccc4a4d8``.
         """
-        path = md5_constructor(key.encode('utf-8')).hexdigest()
+        key = self.make_key(key)
+        path = md5_constructor(key).hexdigest()
         path = os.path.join(path[:2], path[2:4], path[4:])
         return os.path.join(self._dir, path)
 

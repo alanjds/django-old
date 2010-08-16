@@ -1,18 +1,27 @@
 "Base Cache class."
 
 from django.core.exceptions import ImproperlyConfigured
+from django.utils.encoding import smart_str
 
 class InvalidCacheBackendError(ImproperlyConfigured):
     pass
 
 class BaseCache(object):
-    def __init__(self, params):
+    def __init__(self, params, key_prefix=''):
         timeout = params.get('timeout', 300)
         try:
             timeout = int(timeout)
         except (ValueError, TypeError):
             timeout = 300
         self.default_timeout = timeout
+        self.key_prefix = smart_str(key_prefix)
+
+    def make_key(self, key):
+        """Constructs the key used by all other methods. By default it prepends
+        the `key_prefix'. In cache backend subclasses this can be overriden to
+        provide custom key making behavior.
+        """
+        return self.key_prefix + smart_str(key)
 
     def add(self, key, value, timeout=None):
         """

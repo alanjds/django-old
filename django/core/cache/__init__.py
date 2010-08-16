@@ -56,18 +56,18 @@ def parse_backend_uri(backend_uri):
 
     return scheme, host, params
 
-def get_cache(backend_uri):
+def get_cache(backend_uri, key_prefix=settings.CACHE_KEY_PREFIX):
     scheme, host, params = parse_backend_uri(backend_uri)
     if scheme in BACKENDS:
         name = 'django.core.cache.backends.%s' % BACKENDS[scheme]
     else:
         name = scheme
     module = importlib.import_module(name)
-    return getattr(module, 'CacheClass')(host, params)
+    return getattr(module, 'CacheClass')(host, params, key_prefix)
 
 cache = get_cache(settings.CACHE_BACKEND)
 
-# Some caches -- pythont-memcached in particular -- need to do a cleanup at the
+# Some caches -- python-memcached in particular -- need to do a cleanup at the
 # end of a request cycle. If the cache provides a close() method, wire it up
 # here.
 if hasattr(cache, 'close'):

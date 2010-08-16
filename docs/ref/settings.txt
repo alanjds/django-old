@@ -132,6 +132,17 @@ Default: ``'locmem://'``
 
 The cache backend to use. See :ref:`topics-cache`.
 
+.. setting:: CACHE_KEY_PREFIX
+
+CACHE_KEY_PREFIX
+----------------
+
+.. versionadded:: 1.3
+
+Default: ``''`` (Empty string)
+
+The global cache key prefix. See :ref:`topics-cache`.
+
 .. setting:: CACHE_MIDDLEWARE_KEY_PREFIX
 
 CACHE_MIDDLEWARE_KEY_PREFIX

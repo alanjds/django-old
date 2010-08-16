@@ -26,8 +26,8 @@ class Options(object):
         self.proxy = False
 
 class CacheClass(BaseCache):
-    def __init__(self, table, params):
-        BaseCache.__init__(self, params)
+    def __init__(self, table, params, key_prefix=''):
+        BaseCache.__init__(self, params, key_prefix)
         self._table = table
 
         class CacheEntry(object):
@@ -46,6 +46,7 @@ class CacheClass(BaseCache):
             self._cull_frequency = 3
 
     def get(self, key, default=None):
+        key = self.make_key(key)
         db = router.db_for_read(self.cache_model_class)
         table = connections[db].ops.quote_name(self._table)
         cursor = connections[db].cursor()
@@ -71,6 +72,7 @@ class CacheClass(BaseCache):
         return self._base_set('add', key, value, timeout)
 
     def _base_set(self, mode, key, value, timeout=None):
+        key = self.make_key(key)
         if timeout is None:
             timeout = self.default_timeout
         db = router.db_for_write(self.cache_model_class)
@@ -103,6 +105,7 @@ class CacheClass(BaseCache):
             return True
 
     def delete(self, key):
+        key = self.make_key(key)
         db = router.db_for_write(self.cache_model_class)
         table = connections[db].ops.quote_name(self._table)
         cursor = connections[db].cursor()
@@ -111,6 +114,7 @@ class CacheClass(BaseCache):
         transaction.commit_unless_managed(using=db)
 
     def has_key(self, key):
+        key = self.make_key(key)
         db = router.db_for_read(self.cache_model_class)
         table = connections[db].ops.quote_name(self._table)
         cursor = connections[db].cursor()

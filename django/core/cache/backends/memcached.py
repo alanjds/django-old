@@ -3,7 +3,6 @@
 import time
 
 from django.core.cache.backends.base import BaseCache, InvalidCacheBackendError
-from django.utils.encoding import smart_unicode, smart_str
 
 try:
     import cmemcache as memcache
@@ -19,8 +18,8 @@ except ImportError:
         raise InvalidCacheBackendError("Memcached cache backend requires either the 'memcache' or 'cmemcache' library")
 
 class CacheClass(BaseCache):
-    def __init__(self, server, params):
-        BaseCache.__init__(self, params)
+    def __init__(self, server, params, key_prefix=''):
+        BaseCache.__init__(self, params, key_prefix)
         self._cache = memcache.Client(server.split(';'))
 
     def _get_memcache_timeout(self, timeout):
@@ -40,29 +39,35 @@ class CacheClass(BaseCache):
         return timeout
 
     def add(self, key, value, timeout=0):
+        key = self.make_key(key)
         if isinstance(value, unicode):
             value = value.encode('utf-8')
-        return self._cache.add(smart_str(key), value, self._get_memcache_timeout(timeout))
+        return self._cache.add(key, value, self._get_memcache_timeout(timeout))
 
     def get(self, key, default=None):
-        val = self._cache.get(smart_str(key))
+        key = self.make_key(key)
+        val = self._cache.get(key)
         if val is None:
             return default
         return val
 
     def set(self, key, value, timeout=0):
-        self._cache.set(smart_str(key), value, self._get_memcache_timeout(timeout))
+        key = self.make_key(key)
+        self._cache.set(key, value, self._get_memcache_timeout(timeout))
 
     def delete(self, key):
-        self._cache.delete(smart_str(key))
+        key = self.make_key(key)
+        self._cache.delete(key)
 
     def get_many(self, keys):
-        return self._cache.get_multi(map(smart_str,keys))
+        keys = map(self.make_key, keys)
+        return self._cache.get_multi(keys)
 
     def close(self, **kwargs):
         self._cache.disconnect_all()
 
     def incr(self, key, delta=1):
+        key = self.make_key(key)
         try:
             val = self._cache.incr(key, delta)
 
@@ -77,6 +82,7 @@ class CacheClass(BaseCache):
         return val
 
     def decr(self, key, delta=1):
+        key = self.make_key(key)
         try:
             val = self._cache.decr(key, delta)
 
@@ -92,13 +98,15 @@ class CacheClass(BaseCache):
     def set_many(self, data, timeout=0):
         safe_data = {}
         for key, value in data.items():
+            key = self.make_key(key)
             if isinstance(value, unicode):
                 value = value.encode('utf-8')
-            safe_data[smart_str(key)] = value
+            safe_data[key] = value
         self._cache.set_multi(safe_data, self._get_memcache_timeout(timeout))
 
     def delete_many(self, keys):
-        self._cache.delete_multi(map(smart_str, keys))
+        keys = map(self.make_key, keys)
+        self._cache.delete_multi(keys)
 
     def clear(self):
         self._cache.flush_all()

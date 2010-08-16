@@ -643,6 +643,36 @@ nonexistent cache key.::
     However, if the backend doesn't natively provide an increment/decrement
     operation, it will be implemented using a two-step retrieve/update.
 
+CACHE_KEY_PREFIX
+----------------
+
+.. versionadded:: 1.3
+
+It is a common occurence to have a shared cache instance running on your development
+or production server for use across multiple projects, i.e. all sites are pointing
+to the memcached instance running on port 11211. As a result, cache key conflicts
+may arise which could result in data from one site being used by another.
+
+To alleviate this, CACHE_KEY_PREFIX can be set. This will be prepended to all keys
+that are used with the cache backend, transparently::
+
+    # in settings, CACHE_KEY_PREFIX = 'myproject_'
+
+    >>> cache.set('my_key', 'hello world!') # set with key 'myproject_my_key'
+    >>> cache.get('my_key') # retrieved with key 'myproject_my_key'
+    'hello world!'
+
+Of course, for sites that _do_ share content, simply set the CACHE_KEY_PREFIX for
+both sites to the same value. The default value for CACHE_KEY_PREFIX is the empty
+string ``''``.
+
+.. note::
+   
+   This does *not* conflict with the CACHE_MIDDLEWARE_KEY_PREFIX and can be used
+   in conjunction with it. CACHE_KEY_PREFIX acts as a global prefix for a
+   particular cache instance, therefore it will be prepended to the
+   CACHE_MIDDLEWARE_KEY_PREFIX transparently.
+
 Upstream caches
 ===============
 

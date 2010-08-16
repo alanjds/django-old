@@ -143,7 +143,6 @@ class DummyCacheTests(unittest.TestCase):
         "clear does nothing for the dummy cache backend"
         self.cache.clear()
 
-
 class BaseCacheTests(object):
     # A common set of tests to apply to all cache backends
     def tearDown(self):
@@ -160,6 +159,18 @@ class BaseCacheTests(object):
         result = self.cache.add("addkey1", "newvalue")
         self.assertEqual(result, False)
         self.assertEqual(self.cache.get("addkey1"), "value")
+
+    def test_prefix(self):
+        # Test for same cache key conflicts between shared backend
+        self.cache.set('somekey', 'value')
+
+        # should not be set in the prefixed cache
+        self.assertFalse(self.pfx_cache.has_key('somekey'))
+
+        self.pfx_cache.set('somekey', 'value2')
+
+        self.assertEqual(self.cache.get('somekey'), 'value')
+        self.assertEqual(self.pfx_cache.get('somekey'), 'value2')
 
     def test_non_existent(self):
         # Non-existent cache keys return as None/default
@@ -358,6 +369,7 @@ class DBCacheTests(unittest.TestCase, BaseCacheTests):
         self._table_name = 'test cache table'
         management.call_command('createcachetable', self._table_name, verbosity=0, interactive=False)
         self.cache = get_cache('db://%s' % self._table_name)
+        self.pfx_cache = get_cache('db://%s' % self._table_name, 'cacheprefix')
 
     def tearDown(self):
         from django.db import connection
@@ -367,6 +379,7 @@ class DBCacheTests(unittest.TestCase, BaseCacheTests):
 class LocMemCacheTests(unittest.TestCase, BaseCacheTests):
     def setUp(self):
         self.cache = get_cache('locmem://')
+        self.pfx_cache = get_cache('locmem://', 'cacheprefix')
 
 # memcached backend isn't guaranteed to be available.
 # To check the memcached backend, the test settings file will
@@ -376,6 +389,7 @@ if settings.CACHE_BACKEND.startswith('memcached://'):
     class MemcachedCacheTests(unittest.TestCase, BaseCacheTests):
         def setUp(self):
             self.cache = get_cache(settings.CACHE_BACKEND)
+            self.pfx_cache = get_cache(settings.CACHE_BACKEND, 'cacheprefix')
 
 class FileBasedCacheTests(unittest.TestCase, BaseCacheTests):
     """
@@ -384,6 +398,7 @@ class FileBasedCacheTests(unittest.TestCase, BaseCacheTests):
     def setUp(self):
         self.dirname = tempfile.mkdtemp()
         self.cache = get_cache('file://%s' % self.dirname)
+        self.pfx_cache = get_cache('file://%s' % self.dirname, 'cacheprefix')
 
     def test_hashing(self):
         """Test that keys are hashed into subdirectories correctly"""
@@ -411,16 +426,16 @@ class CacheUtils(unittest.TestCase):
 
     def setUp(self):
         self.path = '/cache/test/'
-        self.old_settings_key_prefix = settings.CACHE_MIDDLEWARE_KEY_PREFIX
-        self.old_middleware_seconds = settings.CACHE_MIDDLEWARE_SECONDS
+        self.old_cache_middleware_key_prefix = settings.CACHE_MIDDLEWARE_KEY_PREFIX
+        self.old_cache_middleware_seconds = settings.CACHE_MIDDLEWARE_SECONDS
         self.orig_use_i18n = settings.USE_I18N
         settings.CACHE_MIDDLEWARE_KEY_PREFIX = 'settingsprefix'
         settings.CACHE_MIDDLEWARE_SECONDS = 1
         settings.USE_I18N = False
 
     def tearDown(self):
-        settings.CACHE_MIDDLEWARE_KEY_PREFIX = self.old_settings_key_prefix
-        settings.CACHE_MIDDLEWARE_SECONDS = self.old_middleware_seconds
+        settings.CACHE_MIDDLEWARE_KEY_PREFIX = self.old_cache_middleware_key_prefix
+        settings.CACHE_MIDDLEWARE_SECONDS = self.old_cache_middleware_seconds
         settings.USE_I18N = self.orig_use_i18n
 
     def _get_request(self, path):
@@ -472,6 +487,16 @@ class CacheUtils(unittest.TestCase):
         # Make sure that the Vary header is added to the key hash
         learn_cache_key(request, response)
         self.assertEqual(get_cache_key(request), 'views.decorators.cache.cache_page.settingsprefix.a8c87a3d8c44853d7f79474f7ffe4ad5.d41d8cd98f00b204e9800998ecf8427e')
+
+class PrefixedCacheUtils(CacheUtils):
+    def setUp(self):
+        super(PrefixedCacheUtils, self).setUp()
+        self.old_cache_key_prefix = settings.CACHE_KEY_PREFIX
+        settings.CACHE_KEY_PREFIX = 'cacheprefix'
+
+    def tearDown(self):
+        super(PrefixedCacheUtils, self).tearDown()
+        settings.CACHE_KEY_PREFIX = self.old_cache_key_prefix
 
 class CacheI18nTest(unittest.TestCase):
 
@@ -567,6 +592,16 @@ class CacheI18nTest(unittest.TestCase):
         translation.activate('es')
         get_cache_data = FetchFromCacheMiddleware().process_request(request)
         self.assertEqual(get_cache_data.content, es_message)
+
+class PrefixedCacheI18nTest(CacheI18nTest):
+    def setUp(self):
+        super(PrefixedCacheI18nTest, self).setUp()
+        self.old_cache_key_prefix = settings.CACHE_KEY_PREFIX
+        settings.CACHE_KEY_PREFIX = 'cacheprefix'
+
+    def tearDown(self):
+        super(PrefixedCacheI18nTest, self).tearDown()
+        settings.CACHE_KEY_PREFIX = self.old_cache_key_prefix
 
 if __name__ == '__main__':
     unittest.main()

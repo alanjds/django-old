@@ -158,15 +158,16 @@ class Widget(object):
     
     def display_value(self, name, value, attrs=None):
         """
-        Returns the value as string. For example SelectMultiple
-        returns the selected choices as <ul><li>value 1</li><li>value 2</li></ul>
+        Returns the value as user friendly Unicode string representing the 
+        value.
         
         The 'value' given is not guaranteed to be valid input, so subclass
         implementations should program defensively.
-        
-        TODO: better comment.
         """
-        raise NotImplementedError
+        if value is None:
+            value = u''
+        value = conditional_escape(force_unicode(value))
+        return mark_safe('<div id="%s">%s</div>' % (name, value))
 
     def build_attrs(self, extra_attrs=None, **kwargs):
         "Helper function for building an attribute dictionary."
@@ -237,8 +238,10 @@ class Input(Widget):
     
     def display_value(self, name, value, attrs=None):
         if value is None:
-            value = ''
-        return mark_safe(unicode(value))
+            value = u''
+        value = self._format_value(value)
+        return super(Input, self).display_value(name, value, attrs)
+
 
 class TextInput(Input):
     input_type = 'text'
@@ -255,9 +258,11 @@ class PasswordInput(Input):
         return super(PasswordInput, self).render(name, value, attrs)
     
     def display_value(self, name, value, attrs=None):
-        if value is None:
-            value = ''
-        return mark_safe(u'%s' ('*' * len(value)))
+        if value is None or not self.render_value:
+            value = u''
+        else:
+            value = u'%s' % (u'*' * len(value))
+        return super(PasswordInput, self).display_value(name, value, attrs)
 
 class HiddenInput(Input):
     input_type = 'hidden'
@@ -293,16 +298,6 @@ class MultipleHiddenInput(HiddenInput):
             return data.getlist(name)
         return data.get(name, None)
     
-    """
-    def display_value(self, name, value, attrs=None, choices=()):
-        if value is None:
-            value = []
-        buffer = []
-        for i, v in enumerate(value):
-            pass
-        return ""
-    """
-
 class FileInput(Input):
     input_type = 'file'
     needs_multipart_form = True
@@ -334,11 +329,6 @@ class Textarea(Widget):
         return mark_safe(u'<textarea%s>%s</textarea>' % (flatatt(final_attrs),
                 conditional_escape(force_unicode(value))))
         
-    def display_value(self, name, value, attrs=None):
-        if value is None:
-            value = ''
-        return mark_safe(unicode(value))
-
 class DateInput(Input):
     input_type = 'text'
     format = '%Y-%m-%d'     # '2006-10-25'
@@ -371,11 +361,6 @@ class DateInput(Input):
             pass
         return super(DateInput, self)._has_changed(self._format_value(initial), data)
     
-    def display_value(self, name, value, attrs=None):
-        if value is None:
-            return u''
-        return mark_safe(u'%s' % self._format_value(value))
-
 class DateTimeInput(Input):
     input_type = 'text'
     format = '%Y-%m-%d %H:%M:%S'     # '2006-10-25 14:30:59'
@@ -408,11 +393,6 @@ class DateTimeInput(Input):
             pass
         return super(DateTimeInput, self)._has_changed(self._format_value(initial), data)
 
-    def display_value(self, name, value, attrs=None):
-        if value is None:
-            return u''
-        return mark_safe(u'%s' % self._format_value(value))
-
 class TimeInput(Input):
     input_type = 'text'
     format = '%H:%M:%S'     # '14:30:59'
@@ -443,11 +423,6 @@ class TimeInput(Input):
         except (TypeError, ValueError):
             pass
         return super(TimeInput, self)._has_changed(self._format_value(initial), data)
-    
-    def display_value(self, name, value, attrs=None):
-        if value is None:
-            return u''
-        return mark_safe(u'%s' % self._format_value(value))
 
 class CheckboxInput(Widget):
     def __init__(self, attrs=None, check_test=bool):
@@ -487,6 +462,9 @@ class CheckboxInput(Widget):
         return bool(initial) != bool(data)
     
     def display_value(self, name, value, attrs=None):
+        # HELP: What should this return? Checkbox seems a good choice 
+        # from UI perspective, but having any kind of HTML form element
+        # here seems uqly...
         if attrs is None:
             attrs = {}
         attrs['disabled'] = 'disabled'
@@ -517,7 +495,7 @@ class Select(Widget):
             return u'<option value="%s"%s>%s</option>' % (
                 escape(option_value), selected_html,
                 conditional_escape(force_unicode(option_label)))
-        # Normalize to strings. # TODO: what is this for?
+        # Normalize to strings. 
         selected_choices = set([force_unicode(v) for v in selected_choices])
         output = []
         for option_value, option_label in chain(self.choices, choices):
@@ -531,12 +509,13 @@ class Select(Widget):
         return u'\n'.join(output)
     
     def display_value(self, name, value, attrs=None, choices=()):
-        if value is None or value == '':
-            return u''
+        if value is None:
+            value = u''
+        value = force_unicode(value)
         for option_value, option_label in chain(self.choices, choices):
-            if option_value == value:
-                return force_unicode(option_label)
-        return u''
+            if force_unicode(option_value) == value:
+                return super(Select, self).display_value(name, option_label, attrs)
+        return super(Select, self).display_value(name, value, attrs)
             
             
 
@@ -614,14 +593,15 @@ class SelectMultiple(Select):
     def display_value(self, name, value, attrs=None, choices=()):
         if value is None:
             value = []
-        value_set = set(value)
+        values_set = set([force_unicode(v) for v in value])
         buffer = []
         buffer.append(u'<ul>')
         for option_value, option_label in chain(self.choices, choices):
-            if option_value in value_set:
-                buffer.append('<li>%s</li>' % force_unicode(option_label))
+            if force_unicode(option_value) in values_set:
+                buffer.append(u'<li>%s</li>' % conditional_escape(force_unicode(option_label)))
         buffer.append(u'</ul>')
-        return mark_safe(u'\n'.join(buffer))
+        value = mark_safe(u'\n'.join(buffer))
+        return super(SelectMultiple, self).display_value(name, value, attrs)
 
 class RadioInput(StrAndUnicode):
     """
@@ -711,12 +691,6 @@ class RadioSelect(Select):
         return id_
     id_for_label = classmethod(id_for_label)
     
-    def display_value(self, name, value, attrs=None, choices=()):
-        if attrs is None:
-            attrs = {}
-        attrs['disabled'] = 'disabled'
-        return self.render(name, value, attrs, choices)
-
 class CheckboxSelectMultiple(SelectMultiple):
     def render(self, name, value, attrs=None, choices=()):
         if value is None: value = []
@@ -741,12 +715,6 @@ class CheckboxSelectMultiple(SelectMultiple):
             output.append(u'<li><label%s>%s %s</label></li>' % (label_for, rendered_cb, option_label))
         output.append(u'</ul>')
         return mark_safe(u'\n'.join(output))
-    
-    def display_value(self, name, value, attrs=None, choices=()):
-        if attrs is None:
-            attrs = {}
-        attrs['disabled'] = 'disabled'
-        return self.render(name, value, attrs, choices)
 
     def id_for_label(self, id_):
         # See the comment for RadioSelect.id_for_label()
@@ -808,6 +776,7 @@ class MultiWidget(Widget):
         return mark_safe(self.format_output(output))
     
     def display_value(self, name, value, attrs=None):
+        # TODO: DRY, repeats parts of render.
         if self.is_localized:
             for widget in self.widgets:
                 widget.is_localized = self.is_localized
@@ -819,10 +788,7 @@ class MultiWidget(Widget):
                 widget_value = value[i]
             except IndexError:
                 widget_value = None
-            try:
-                output.append(widget.display_value(name + '_%s' % i, widget_value, final_attrs))
-            except NotImplementedError:
-                output.append(widget_value)
+            output.append(widget.display_value(name + '_%s' % i, widget_value, final_attrs))
         return mark_safe(self.format_display_values(output))
 
     def id_for_label(self, id_):

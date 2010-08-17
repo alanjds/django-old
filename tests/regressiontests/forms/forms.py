@@ -1259,38 +1259,61 @@ for a field by using the BoundField's value attribute.
 ...    password = CharField(widget=PasswordInput)
 ...    gender = ChoiceField(choices=(('M', 'Male'), ('F', 'Female')))
 ...    role = ChoiceField(choices=(('user', 'Site user'), ('admin', 'Site admin')), initial='user')
->>> p = UserRegistration({'password': 'foo', 'gender': 'M'})
+...    group = MultipleChoiceField(choices=((1, 'Group 1'), (2, 'Group 2'), (3, 'Group 3')))
+>>> p = UserRegistration({'password': 'foo', 'gender': 'M', 'group': [1, 3]})
 >>> print 'username.value =', p['username'].value
 username.value = 
 >>> print 'username.display_value =', p['username'].display_value
-username.display_value = 
+username.display_value = <div id="username"></div>
 >>> print 'username.data = ', p['username'].data
 username.data = None
 >>> print 'password.value =', p['password'].value
 password.value = foo
 >>> print 'password.display_value =', p['password'].display_value
-password.display_value = foo
+password.display_value = <div id="password"></div>
+>>> p.fields['password'].widget.render_value = True
+>>> print 'password.display_value =', p['password'].display_value
+password.display_value = <div id="password">***</div>
 >>> print 'password.data =', p['password'].data
 password.data = foo
 >>> print 'gender.value =', p['gender'].value
 gender.value = M
 >>> print 'gender.display_value =', p['gender'].display_value
-gender.display_value = Male
+gender.display_value = <div id="gender">Male</div>
 >>> print 'gender.data =', p['gender'].data
 gender.data = M
 >>> print 'role.value =', p['role'].value
 role.value = 
 >>> print 'role.display_value =', p['role'].display_value
-role.display_value = 
+role.display_value = <div id="role"></div>
 >>> print 'role.data =', p['role'].data
 role.data = None
+>>> print 'group.data =', p['group'].data
+group.data = [1, 3]
+>>> print 'group.value =', p['group'].value
+group.value = [1, 3]
+>>> print 'group.display_value =\n', p['group'].display_value
+group.display_value = 
+ <div id="group"><ul>
+<li>Group 1</li>
+<li>Group 3</li>
+</ul></div>
 
 The value of username is empty because the form is bound -- the value wasn't
 specified, and so is empty. This differs if the form were to be unbound:
 
->>> p = UserRegistration()
+>>> p = UserRegistration(initial={'role': 'admin'})
 >>> print p['username'].value
 djangonaut
+
+The value of role is determined from the initial form data, not from the
+widget's initial data. There is no data, however:
+
+>>> print 'role.display_value =', p['role'].display_value
+role.display_value = <div id="role">Site admin</div>
+>>> print 'role.data =', p['role'].data
+role.data = None
+
 
 # Help text ###################################################################
 

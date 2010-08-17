@@ -18,10 +18,10 @@ __all__ = ('BaseForm', 'Form')
 NON_FIELD_ERRORS = '__all__'
 
 def pretty_name(name):
-    """Converts 'first_name' to 'First name'""" 
-    if not name: 
-        return u'' 
-    return name.replace('_', ' ').capitalize() 
+    """Converts 'first_name' to 'First name'"""
+    if not name:
+        return u''
+    return name.replace('_', ' ').capitalize()
 
 def get_declared_fields(bases, attrs, with_base_fields=True):
     """
@@ -423,6 +423,7 @@ class BoundField(StrAndUnicode):
         """
         if not widget:
             widget = self.field.widget
+
         attrs = attrs or {}
         auto_id = self.auto_id
         if auto_id and 'id' not in attrs and 'id' not in widget.attrs:
@@ -434,7 +435,7 @@ class BoundField(StrAndUnicode):
             name = self.html_name
         else:
             name = self.html_initial_name
-        return widget.render(name, self.value, attrs=attrs)
+        return widget.render(name, self.raw_value(), attrs=attrs)
 
     def as_text(self, attrs=None, **kwargs):
         """
@@ -459,9 +460,9 @@ class BoundField(StrAndUnicode):
         return self.field.widget.value_from_datadict(self.form.data, self.form.files, self.html_name)
     data = property(_data)
 
-    def _value(self):
+    def _raw_value(self):    
         """
-        Returns the value for this BoundField, as rendered in widgets.
+        Returns the value from data or initial value.
         """
         if not self.form.is_bound:
             val = self.form.initial.get(self.name, self.field.initial)
@@ -472,6 +473,14 @@ class BoundField(StrAndUnicode):
                 val = self.form.initial.get(self.name, self.field.initial)
             else:
                 val = self.data
+        val = self.field.prepare_value(val)
+        return val
+
+    def _value(self):
+        """
+        Returns the value for this BoundField, as rendered in widgets.
+        """
+        val = self._raw_value()
         if val is None:
             val = ''
         return val
@@ -482,17 +491,8 @@ class BoundField(StrAndUnicode):
         Returns the displayed value for this BoundField, as rendered in widgets.
         """
         value = self.value
-        try:
-            return self.field.widget.display_value(self.html_name, value)
-        except NotImplementedError:
-            return value
-        """
-        if isinstance(self.field, ChoiceField):
-            for (val, desc) in self.field.choices:
-                if val == value:
-                    return desc
-        return self.value
-        """
+        return self.field.widget.display_value(self.html_name, value)
+
     display_value = property(_display_value)
 
     def label_tag(self, contents=None, attrs=None):

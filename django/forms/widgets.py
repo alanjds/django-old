@@ -15,6 +15,7 @@ import time
 import datetime
 from util import flatatt
 from urlparse import urljoin
+import re
 
 __all__ = (
     'Media', 'MediaDefiningClass', 'Widget', 'TextInput', 'PasswordInput',
@@ -352,7 +353,15 @@ class Textarea(Widget):
         final_attrs = self.build_attrs(attrs, name=name)
         return mark_safe(u'<textarea%s>%s</textarea>' % (flatatt(final_attrs),
                 conditional_escape(force_unicode(value))))
-        
+    
+    def display_value(self, name, value, attrs=None):
+        if value is not None:
+            # Need to replace linefeeds with <br />
+            value = conditional_escape(force_unicode(value))
+            value = re.sub('(\r\n|\n\r|\r|\n)', u'<br />', value)
+            value = mark_safe(value)
+        return super(Textarea, self).display_value(name, value, attrs)
+
 class DateInput(Input):
     input_type = 'text'
     format = '%Y-%m-%d'     # '2006-10-25'

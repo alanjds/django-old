@@ -297,6 +297,19 @@ class MultipleHiddenInput(HiddenInput):
         if isinstance(data, (MultiValueDict, MergeDict)):
             return data.getlist(name)
         return data.get(name, None)
+
+    def display_value(self, name, value, attrs=None, choices=()):
+        if value is None:
+            value = []
+        output = [u'<ul>']
+        for v in value:
+            v = conditional_escape(force_unicode(v))
+            output.append(u'<li>%s</li>' % v)
+        output.append(u'</ul>')
+        value = mark_safe(u'\n'.join(output))
+        return super(MultipleHiddenInput, self).display_value(name, value, 
+                                                              attrs)
+            
     
 class FileInput(Input):
     input_type = 'file'
@@ -313,6 +326,17 @@ class FileInput(Input):
         if data is None:
             return False
         return True
+    
+    """
+    def display_value(self, name, value, attrs=None):
+        if value and hasattr(value, "url"):
+            value = '<a href="%s">%s</a>' % (value.url, value)
+        else:
+            value = u''
+        return super(FileInput, self).display_value(name, value, attrs)
+    """
+    def display_value(self, name, value, attrs=None):
+        return u''
     
 
 class Textarea(Widget):
@@ -508,14 +532,28 @@ class Select(Widget):
                 output.append(self.render_option(selected_choices, option_value, option_label))
         return u'\n'.join(output)
     
+    def _get_display_values(self, value, choices, line_str):
+        if value is None:
+            value = []
+        values_set = set([force_unicode(v) for v in value])
+        buffer = []
+        for option_value, option_label in chain(self.choices, choices):
+            if isinstance(option_label, (list, tuple)):
+                for option_value, option_label in option_label:
+                    if force_unicode(option_value) in values_set:
+                        buffer.append(line_str % \
+                            conditional_escape(force_unicode(option_label)))
+            elif force_unicode(option_value) in values_set:
+                buffer.append(line_str % \
+                    conditional_escape(force_unicode(option_label)))
+        return mark_safe(u'\n'.join(buffer))
+    
     def display_value(self, name, value, attrs=None, choices=()):
         if value is None:
             value = u''
-        value = force_unicode(value)
-        for option_value, option_label in chain(self.choices, choices):
-            if force_unicode(option_value) == value:
-                return super(Select, self).display_value(name, option_label, attrs)
-        return super(Select, self).display_value(name, value, attrs)
+        else:
+            value = self._get_display_values([value], choices, '%s')
+        return super(Select, self).display_value(name, value, attrs) 
             
             
 
@@ -592,16 +630,11 @@ class SelectMultiple(Select):
     
     def display_value(self, name, value, attrs=None, choices=()):
         if value is None:
-            value = []
-        values_set = set([force_unicode(v) for v in value])
-        buffer = []
-        buffer.append(u'<ul>')
-        for option_value, option_label in chain(self.choices, choices):
-            if force_unicode(option_value) in values_set:
-                buffer.append(u'<li>%s</li>' % conditional_escape(force_unicode(option_label)))
-        buffer.append(u'</ul>')
-        value = mark_safe(u'\n'.join(buffer))
-        return super(SelectMultiple, self).display_value(name, value, attrs)
+            value = u''
+        else:
+            value = self._get_display_values(value, choices, '<li>%s</li>')
+            value = mark_safe(u'<ul>\n%s\n</ul>' % value)
+        return super(Select, self).display_value(name, value, attrs) 
 
 class RadioInput(StrAndUnicode):
     """

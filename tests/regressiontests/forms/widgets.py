@@ -19,6 +19,9 @@ Each Widget class corresponds to an HTML form widget. A Widget knows how to
 render itself, given a field name and some data. Widgets don't perform
 validation.
 
+Widgets also know how to render the value in user friendly format for display
+purposes using display_value, given a field name and some data.
+
 # TextInput Widget ############################################################
 
 >>> w = TextInput()
@@ -32,6 +35,11 @@ u'<input type="text" name="email" value="test@example.com" />'
 u'<input type="text" name="email" value="some &quot;quoted&quot; &amp; ampersanded value" />'
 >>> w.render('email', 'test@example.com', attrs={'class': 'fun'})
 u'<input type="text" name="email" value="test@example.com" class="fun" />'
+>>> w.display_value('email', 'some "quoted" & ampersanded value')
+u'<div id="email">some &quot;quoted&quot; &amp; ampersanded value</div>'
+>>> w.display_value('email', None)
+u'<div id="email"></div>'
+
 
 # Note that doctest in Python 2.4 (and maybe 2.5?) doesn't support non-ascii
 # characters in output, so we're displaying the repr() here.
@@ -64,6 +72,8 @@ u'<input type="password" name="email" />'
 u'<input type="password" name="email" />'
 >>> w.render('email', 'secret')
 u'<input type="password" name="email" />'
+>>> w.display_value('email', 'secret')
+u'<div id="email"></div>'
 
 The render_value argument lets you specify whether the widget should render
 its value. For security reasons, this is off by default.
@@ -73,6 +83,10 @@ its value. For security reasons, this is off by default.
 u'<input type="password" name="email" />'
 >>> w.render('email', None)
 u'<input type="password" name="email" />'
+>>> w.display_value('email', 'secret')
+u'<div id="email">******</div>'
+>>> w.display_value('email', None)
+u'<div id="email"></div>'
 >>> w.render('email', 'test@example.com')
 u'<input type="password" name="email" value="test@example.com" />'
 >>> w.render('email', 'some "quoted" & ampersanded value')
@@ -108,6 +122,10 @@ u'<input type="hidden" name="email" value="test@example.com" />'
 u'<input type="hidden" name="email" value="some &quot;quoted&quot; &amp; ampersanded value" />'
 >>> w.render('email', 'test@example.com', attrs={'class': 'fun'})
 u'<input type="hidden" name="email" value="test@example.com" class="fun" />'
+>>> w.display_value('email', 'some "quoted" & ampersanded value')
+u'<div id="email">some &quot;quoted&quot; &amp; ampersanded value</div>'
+>>> w.display_value('email', None)
+u'<div id="email"></div>'
 
 You can also pass 'attrs' to the constructor:
 >>> w = HiddenInput(attrs={'class': 'fun'})
@@ -153,6 +171,14 @@ u'<input type="hidden" name="email" value="test@example.com" />\n<input type="hi
 u'<input type="hidden" name="email" value="test@example.com" class="fun" />'
 >>> w.render('email', ['test@example.com', 'foo@example.com'], attrs={'class': 'fun'})
 u'<input type="hidden" name="email" value="test@example.com" class="fun" />\n<input type="hidden" name="email" value="foo@example.com" class="fun" />'
+>>> w.display_value('email', ['test@example.com', 'some "quoted" & ampersanded value'])
+u'<div id="email"><ul>
+<li>test@example.com</li>
+<li>some &quot;quoted&quot; &amp; ampersanded value</li>
+</ul></div>'
+>>> w.display_value('email', None)
+u'<div id="email"><ul>
+</ul></div>'
 
 You can also pass 'attrs' to the constructor:
 >>> w = MultipleHiddenInput(attrs={'class': 'fun'})
@@ -206,6 +232,8 @@ u'<input type="file" class="fun" name="email" />'
 
 >>> w.render('email', 'ŠĐĆŽćžšđ', attrs={'class': 'fun'})
 u'<input type="file" class="fun" name="email" />'
+>>> w.display_value('email', 'foo@example.com') == u''
+True
 
 Test for the behavior of _has_changed for FileInput. The value of data will
 more than likely come from request.FILES. The value of initial data will
@@ -246,6 +274,13 @@ u'<textarea rows="10" cols="40" name="msg">some &quot;quoted&quot; &amp; ampersa
 u'<textarea rows="10" cols="40" name="msg">pre &quot;quoted&quot; value</textarea>'
 >>> w.render('msg', 'value', attrs={'class': 'pretty', 'rows': 20})
 u'<textarea class="pretty" rows="20" cols="40" name="msg">value</textarea>'
+>>> w.display_value('msg', mark_safe('pre &quot;quoted&quot; value'))
+u'<div id="msg">pre &quot;quoted&quot; value</div>'
+>>> w.display_value('msg', 'some "quoted" & ampersanded value')
+u'<div id="msg">some &quot;quoted&quot; &amp; ampersanded value</div>'
+>>> w.display_value('msg', None)
+u'<div id="msg"></div>'
+
 
 You can also pass 'attrs' to the constructor:
 >>> w = Textarea(attrs={'class': 'pretty'})
@@ -303,6 +338,11 @@ u'<input checked="checked" type="checkbox" name="greeting" value="hello" />'
 u'<input checked="checked" type="checkbox" name="greeting" value="hello there" />'
 >>> w.render('greeting', 'hello & goodbye')
 u'<input checked="checked" type="checkbox" name="greeting" value="hello &amp; goodbye" />'
+>>> w.display_value('greeting', 'hello & goodbye')
+u'<input disabled="disabled" checked="checked" type="checkbox" name="greeting" value="hello &amp; goodbye" />'
+>>> w.display_value('greeting', '')
+u'<input disabled="disabled" type="checkbox" name="greeting" />'
+
 
 A subtlety: If the 'check_test' argument cannot handle a value and raises any
 exception during its __call__, then the exception will be swallowed and the box
@@ -346,6 +386,8 @@ True
 <option value="G">George</option>
 <option value="R">Ringo</option>
 </select>
+>>> print w.display_value('beatle', 'J', choices=(('J', 'John'), ('P', 'Paul'), ('G', 'George'), ('R', 'Ringo')))
+<div id="beatle">John</div>
 
 If the value is None, none of the options are selected:
 >>> print w.render('beatle', None, choices=(('J', 'John'), ('P', 'Paul'), ('G', 'George'), ('R', 'Ringo')))
@@ -355,6 +397,8 @@ If the value is None, none of the options are selected:
 <option value="G">George</option>
 <option value="R">Ringo</option>
 </select>
+>>> print w.display_value('beatle', None, choices=(('J', 'John'), ('P', 'Paul'), ('G', 'George'), ('R', 'Ringo')))
+<div id="beatle"></div>
 
 If the value corresponds to a label (but not to an option value), none of the options are selected:
 >>> print w.render('beatle', 'John', choices=(('J', 'John'), ('P', 'Paul'), ('G', 'George'), ('R', 'Ringo')))
@@ -372,18 +416,24 @@ The value is compared to its str():
 <option value="2" selected="selected">2</option>
 <option value="3">3</option>
 </select>
+>>> print w.display_value('num', 2, choices=[('1', '1'), ('2', '2'), ('3', '3')])
+<div id="num">2</div>
 >>> print w.render('num', '2', choices=[(1, 1), (2, 2), (3, 3)])
 <select name="num">
 <option value="1">1</option>
 <option value="2" selected="selected">2</option>
 <option value="3">3</option>
 </select>
+>>> print w.display_value('num', '2', choices=[(1, 1), (2, 2), (3, 3)])
+<div id="num">2</div>
 >>> print w.render('num', 2, choices=[(1, 1), (2, 2), (3, 3)])
 <select name="num">
 <option value="1">1</option>
 <option value="2" selected="selected">2</option>
 <option value="3">3</option>
 </select>
+>>> print w.display_value('num', 2, choices=[(1, 1), (2, 2), (3, 3)])
+<div id="num">2</div>
 
 The 'choices' argument can be any iterable:
 >>> from itertools import chain
@@ -438,6 +488,11 @@ If 'choices' is passed to both the constructor and render(), then they'll both b
 <option value="bad">you &amp; me</option>
 <option value="good">you &gt; me</option>
 </select>
+>>> print w.display_value('escape', 'bad', choices=(('bad', 'you & me'), ('good', mark_safe('you &gt; me'))))
+<div id="escape">you &amp; me</div>
+>>> print w.display_value('escape', 'good', choices=(('bad', 'you & me'), ('good', mark_safe('you &gt; me'))))
+<div id="escape">you &gt; me</div>
+
 
 # Unicode choices are correctly rendered as HTML
 >>> w.render('email', 'ŠĐĆŽćžšđ', choices=[('ŠĐĆŽćžšđ', 'ŠĐabcĆŽćžšđ'), ('ćžšđ', 'abcćžšđ')])
@@ -482,6 +537,8 @@ Choices can be nested one level in order to create HTML optgroups:
 <option value="inner2">Inner 2</option>
 </optgroup>
 </select>
+>>> print w.display_value('nestchoice', 'outer1')
+<div id="nestchoice">Outer 1</div>
 
 >>> print w.render('nestchoice', 'inner1')
 <select name="nestchoice">
@@ -491,6 +548,8 @@ Choices can be nested one level in order to create HTML optgroups:
 <option value="inner2">Inner 2</option>
 </optgroup>
 </select>
+>>> print w.display_value('nestchoice', 'inner1')
+<div id="nestchoice">Inner 1</div>
 
 # NullBooleanSelect Widget ####################################################
 

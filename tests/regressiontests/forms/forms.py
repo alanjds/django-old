@@ -1263,6 +1263,14 @@ for a field by using the BoundField's value attribute.
 >>> p = UserRegistration({'password': 'foo', 'gender': 'M', 'group': [1, 3]})
 >>> print 'username.value =', p['username'].value
 username.value = 
+>>> p['username'].value == u''
+True
+
+Make sure that the _raw_value() used by BoundField.as_widget() returns
+None instead of u''
+
+>>> p['username']._raw_value() is None
+True
 >>> print 'username.display_value =', p['username'].display_value
 username.display_value = <div id="username"></div>
 >>> print 'username.data = ', p['username'].data
@@ -1294,7 +1302,7 @@ group.data = [1, 3]
 group.value = [1, 3]
 >>> print 'group.display_value =\n', p['group'].display_value
 group.display_value = 
- <div id="group"><ul>
+<div id="group"><ul>
 <li>Group 1</li>
 <li>Group 3</li>
 </ul></div>
@@ -1305,15 +1313,19 @@ specified, and so is empty. This differs if the form were to be unbound:
 >>> p = UserRegistration(initial={'role': 'admin'})
 >>> print p['username'].value
 djangonaut
+>>> print p['username'].display_value
+<div id="username">djangonaut</div>
 
 The value of role is determined from the initial form data, not from the
-widget's initial data. There is no data, however:
+widget's initial data.
 
 >>> print 'role.display_value =', p['role'].display_value
 role.display_value = <div id="role">Site admin</div>
+
+There is no data, however.
+
 >>> print 'role.data =', p['role'].data
 role.data = None
-
 
 # Help text ###################################################################
 

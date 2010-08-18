@@ -435,7 +435,7 @@ class BoundField(StrAndUnicode):
             name = self.html_name
         else:
             name = self.html_initial_name
-        return widget.render(name, self.raw_value(), attrs=attrs)
+        return widget.render(name, self._raw_value(), attrs=attrs)
 
     def as_text(self, attrs=None, **kwargs):
         """
@@ -481,9 +481,7 @@ class BoundField(StrAndUnicode):
         Returns the value for this BoundField, as rendered in widgets.
         """
         val = self._raw_value()
-        if val is None:
-            val = ''
-        return val
+        return val if val else u''
     value = property(_value)
 
     def _display_value(self):

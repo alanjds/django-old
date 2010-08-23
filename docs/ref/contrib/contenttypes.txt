@@ -1,5 +1,3 @@
-.. _ref-contrib-contenttypes:
-
 ==========================
 The contenttypes framework
 ==========================
@@ -114,7 +112,7 @@ Methods on ``ContentType`` instances
 
     Takes a set of valid :ref:`lookup arguments <field-lookups-intro>` for the
     model the :class:`~django.contrib.contenttypes.models.ContentType`
-    represents, and does :ref:`a get() lookup <get-kwargs>` on that model,
+    represents, and does :lookup:`a get() lookup <get>` on that model,
     returning the corresponding object.
 
 .. method:: models.ContentType.model_class()
@@ -346,7 +344,7 @@ it would be deleted at the same time.
 Generic relations and aggregation
 ---------------------------------
 
-:ref:`Django's database aggregation API <topics-db-aggregation>`
+:doc:`Django's database aggregation API </topics/db/aggregation>`
 doesn't work with a
 :class:`~django.contrib.contenttypes.generic.GenericRelation`. For example, you
 might be tempted to try something like::
@@ -365,14 +363,14 @@ Generic relations in forms and admin
 :class:`~django.contrib.contenttypes.generic.GenericInlineFormSet`
 and :class:`~django.contrib.contenttypes.generic.GenericInlineModelAdmin`.
 This enables the use of generic relations in forms and the admin. See the
-:ref:`model formset <topics-forms-modelforms>` and
-:ref:`admin <ref-contrib-admin>` documentation for more information.
+:doc:`model formset </topics/forms/modelforms>` and
+:doc:`admin </ref/contrib/admin/index>` documentation for more information.
 
 .. class:: generic.GenericInlineModelAdmin
 
     The :class:`~django.contrib.contenttypes.generic.GenericInlineModelAdmin`
     class inherits all properties from an
-    :class:`~django.contrib.admin.options.InlineModelAdmin` class. However,
+    :class:`~django.contrib.admin.InlineModelAdmin` class. However,
     it adds a couple of its own for working with the generic relation:
 
     .. attribute:: generic.GenericInlineModelAdmin.ct_field

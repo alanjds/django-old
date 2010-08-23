@@ -527,10 +527,12 @@ class SelectMultiple(Select):
             data = []
         if len(initial) != len(data):
             return True
-        for value1, value2 in zip(initial, data):
-            if force_unicode(value1) != force_unicode(value2):
-                return True
-        return False
+        initial_set = set([force_unicode(value) for value in initial])
+        data_set = set([force_unicode(value) for value in data])
+        if len(data_set - initial_set) == 0:
+            return False
+        else:
+            return True
 
 class RadioInput(StrAndUnicode):
     """
@@ -619,7 +621,7 @@ class RadioSelect(Select):
             id_ += '_0'
         return id_
     id_for_label = classmethod(id_for_label)
-
+    
 class CheckboxSelectMultiple(SelectMultiple):
     def render(self, name, value, attrs=None, choices=()):
         if value is None: value = []

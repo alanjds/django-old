@@ -673,6 +673,8 @@ False
 True
 >>> w._has_changed([1, 2], [u'1', u'3'])
 True
+>>> w._has_changed([2, 1], [u'1', u'2'])
+False
 
 # Choices can be nested one level in order to create HTML optgroups:
 >>> w.choices = (('outer1', 'Outer 1'), ('Group "1"', (('inner1', 'Inner 1'), ('inner2', 'Inner 2'))))

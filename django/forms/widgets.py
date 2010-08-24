@@ -621,7 +621,7 @@ class RadioSelect(Select):
             id_ += '_0'
         return id_
     id_for_label = classmethod(id_for_label)
-    
+
 class CheckboxSelectMultiple(SelectMultiple):
     def render(self, name, value, attrs=None, choices=()):
         if value is None: value = []

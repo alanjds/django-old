@@ -481,7 +481,7 @@ class BoundField(StrAndUnicode):
         Returns the value for this BoundField, as rendered in widgets.
         """
         val = self._raw_value()
-        return val if val else u''
+        return val if val is not None else u''
     value = property(_value)
 
     def _display_value(self):

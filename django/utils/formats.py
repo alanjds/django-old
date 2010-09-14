@@ -7,6 +7,16 @@ from django.utils.importlib import import_module
 from django.utils.encoding import smart_str
 from django.utils import dateformat, numberformat, datetime_safe
 
+# format_cache is a mapping from format_type to a 1-tuple. This allows 
+# us to separate 3 distinct cases:
+#      (None,)            the format_type was checked previously, but 
+#                         no value was found.
+#      (<format value>, ) the previously fetched value for format_type
+#                         is format_value
+#      if a format_type key is not in _format_cache, then format_type
+#      hasn't yet been fetched.
+_format_cache = {}
+
 def get_format_modules(reverse=False, lang=None):
     """
     Returns an iterator over the format modules found in the project and Django
@@ -36,8 +46,6 @@ def get_format_modules(reverse=False, lang=None):
         modules.reverse()
     return modules
 
-_format_cache = {} 
-
 def get_format(format_type, lang=None):
     """
     For a specific format type, returns the format for the current
@@ -49,16 +57,22 @@ def get_format(format_type, lang=None):
     if settings.USE_L10N:
         if lang is None:
             lang = get_language()
-        cache_value = _format_cache.get((format_type, lang))
-        if cache_value:
-            return cache_value
-        for module in get_format_modules(lang=lang):
-            try:
-                val = getattr(module, format_type)
-                _format_cache[(format_type, lang)] = val
-                return val
-            except AttributeError:
+        cached_value = _format_cache.get((format_type, lang), None)
+        if cached_value:
+            if cached_value[0]:
+                return cached_value[0]
+            else:
+                # format_type was previously checked, but didn't have a value
                 pass
+        else: 
+            for module in get_format_modules(lang=lang):
+                try:
+                    val = getattr(module, format_type)
+                    _format_cache[(format_type, lang)] = (val,)
+                    return val
+                except AttributeError:
+                    pass
+            _format_cache[(format_type, lang)] = (None,)
     return getattr(settings, format_type)
 
 def date_format(value, format=None):

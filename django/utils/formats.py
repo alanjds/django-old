@@ -52,17 +52,14 @@ def get_format(format_type, lang=None):
         cache_value = _format_cache.get((format_type, lang))
         if cache_value:
             return cache_value
-        val = None
         for module in get_format_modules(lang=lang):
             try:
                 val = getattr(module, format_type)
-                break
+                _format_cache[(format_type, lang)] = val
+                return val
             except AttributeError:
                 pass
-    if val is None:
-        val = getattr(settings, format_type)
-    _format_cache[(format_type, lang)] = val 
-    return val
+    return getattr(settings, format_type)
 
 def date_format(value, format=None):
     """

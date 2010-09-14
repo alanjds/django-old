@@ -17,9 +17,6 @@ from django.utils.thread_support import currentThread
 _translations = {}
 _active = {}
 
-# Cache for to_locale
-_locale_cache = {}
-
 # The default translation is based on the settings file.
 _default = None
 
@@ -39,33 +36,25 @@ def to_locale(language, to_lower=False):
     Turns a language name (en-us) into a locale name (en_US). If 'to_lower' is
     True, the last component is lower-cased (en_us).
     """
-    global _locale_cache
-    val = _locale_cache.get((locale, to_lower))
-    if val:
-        return val
     p = language.find('-')
     if p >= 0:
         if to_lower:
-            val = language[:p].lower()+'_'+language[p+1:].lower()
+            return language[:p].lower()+'_'+language[p+1:].lower()
         else:
             # Get correct locale for sr-latn
             if len(language[p+1:]) > 2:
-                val = language[:p].lower()+'_'+language[p+1].upper()+language[p+2:].lower()
-            val = language[:p].lower()+'_'+language[p+1:].upper()
+                return language[:p].lower()+'_'+language[p+1].upper()+language[p+2:].lower()
+            return language[:p].lower()+'_'+language[p+1:].upper()
     else:
-        val = language.lower()
-    _locale_cache[(locale, to_lower)] = val
-    return val
+        return language.lower()
 
 def to_language(locale):
     """Turns a locale name (en_US) into a language name (en-us)."""
     p = locale.find('_')
     if p >= 0:
-        val = locale[:p].lower()+'-'+locale[p+1:].lower()
+        return locale[:p].lower()+'-'+locale[p+1:].lower()
     else:
-        val = locale.lower()
-    _locale_cache[locale] = val
-    return val
+        return locale.lower()
 
 class DjangoTranslation(gettext_module.GNUTranslations):
     """
@@ -220,8 +209,6 @@ def deactivate_all():
     """
     _active[currentThread()] = gettext_module.NullTranslations()
 
-def_language = None
-
 def get_language():
     """Returns the currently selected language."""
     t = _active.get(currentThread(), None)
@@ -231,11 +218,8 @@ def get_language():
         except AttributeError:
             pass
     # If we don't have a real translation object, assume it's the default language.
-    global def_language
-    if not def_language:
-        from django.conf import settings
-        def_language = settings.LANGUAGE_CODE
-    return def_language
+    from django.conf import settings
+    return settings.LANGUAGE_CODE
 
 def get_language_bidi():
     """

@@ -7,14 +7,16 @@ from django.utils.importlib import import_module
 from django.utils.encoding import smart_str
 from django.utils import dateformat, numberformat, datetime_safe
 
-def get_format_modules(reverse=False):
+def get_format_modules(reverse=False, lang=None):
     """
     Returns an iterator over the format modules found in the project and Django
     """
+    if lang is None:
+        lang = get_language()
     modules = []
-    if not check_for_language(get_language()) or not settings.USE_L10N:
+    if not check_for_language(lang) or not settings.USE_L10N:
         return modules
-    locale = to_locale(get_language())
+    locale = to_locale(lang)
     if settings.FORMAT_MODULE_PATH:
         format_locations = [settings.FORMAT_MODULE_PATH + '.%s']
     else:
@@ -34,20 +36,33 @@ def get_format_modules(reverse=False):
         modules.reverse()
     return modules
 
-def get_format(format_type):
+_format_cache = {} 
+
+def get_format(format_type, lang=None):
     """
     For a specific format type, returns the format for the current
     language (locale), defaults to the format in the settings.
     format_type is the name of the format, e.g. 'DATE_FORMAT'
     """
     format_type = smart_str(format_type)
+    global _format_cache
     if settings.USE_L10N:
-        for module in get_format_modules():
+        if lang is None:
+            lang = get_language()
+        cache_value = _format_cache.get((format_type, lang))
+        if cache_value:
+            return cache_value
+        val = None
+        for module in get_format_modules(lang=lang):
             try:
-                return getattr(module, format_type)
+                val = getattr(module, format_type)
+                break
             except AttributeError:
                 pass
-    return getattr(settings, format_type)
+    if val is None:
+        val = getattr(settings, format_type)
+    _format_cache[(format_type, lang)] = val 
+    return val
 
 def date_format(value, format=None):
     """
@@ -66,12 +81,13 @@ def number_format(value, decimal_pos=None):
     """
     Formats a numeric value using localization settings
     """
+    lang = get_language()
     return numberformat.format(
         value,
-        get_format('DECIMAL_SEPARATOR'),
+        get_format('DECIMAL_SEPARATOR', lang=lang),
         decimal_pos,
-        get_format('NUMBER_GROUPING'),
-        get_format('THOUSAND_SEPARATOR'),
+        get_format('NUMBER_GROUPING', lang=lang),
+        get_format('THOUSAND_SEPARATOR', lang=lang),
     )
 
 def localize(value):

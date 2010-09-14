@@ -515,7 +515,7 @@ the ``url`` function)::
 ...and then using that name to perform the reverse URL resolution instead
 of the view name::
 
-    from django.db.models import permalink
+    from django.db import models
 
     @models.permalink
     def get_absolute_url(self):
@@ -568,3 +568,5 @@ described in :ref:`Field lookups <field-lookups>`.
 
 Note that in the case of identical date values, these methods will use the ID
 as a fallback check. This guarantees that no records are skipped or duplicated.
+
+That also means you cannot use those methods on unsaved objects.

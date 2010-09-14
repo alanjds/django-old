@@ -23,7 +23,7 @@ autoescape
 
 Control the current auto-escaping behavior. This tag takes either ``on`` or
 ``off`` as an argument and that determines whether auto-escaping is in effect
-inside the block.
+inside the block. The block is closed with an ``endautoescape`` ending tag.
 
 When auto-escaping is in effect, all variable content has HTML escaping applied
 to it before placing the result into the output (but after any filters have
@@ -33,6 +33,12 @@ to each variable.
 The only exceptions are variables that are already marked as "safe" from
 escaping, either by the code that populated the variable, or because it has had
 the ``safe`` or ``escape`` filters applied.
+
+Sample usage::
+
+    {% autoescape on %}
+        {{ body }}
+    {% endautoescape %}
 
 .. templatetag:: block
 
@@ -1961,6 +1967,19 @@ For example::
 If ``value`` is ``"http://www.example.org/foo?a=b&c=d"``, the output will be
 ``"http%3A//www.example.org/foo%3Fa%3Db%26c%3Dd"``.
 
+.. versionadded:: 1.1
+
+An optional argument containing the characters which should not be escaped can
+be provided.
+
+If not provided, the '/' character is assumed safe. An empty string can be
+provided when *all* characters should be escaped. For example::
+
+    {{ value|urlencode:"" }}
+
+If ``value`` is ``"http://www.example.org/"``, the output will be
+``"http%3A%2F%2Fwww.example.org%2F"``.
+
 .. templatefilter:: urlize
 
 urlize
@@ -2071,7 +2090,7 @@ A collection of template filters that implement these common markup languages:
     * Markdown
     * ReST (ReStructured Text)
 
-See :ref:`ref-contrib-markup`.
+See the :doc:`markup documentation </ref/contrib/markup>`.
 
 django.contrib.webdesign
 ~~~~~~~~~~~~~~~~~~~~~~~~

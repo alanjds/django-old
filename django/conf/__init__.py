@@ -20,6 +20,7 @@ ENVIRONMENT_VARIABLE = "DJANGO_SETTINGS_MODULE"
 class AnotherLazySettings(object):
     def __init__(self):
         self._is_configured = False
+        self._wrapped = None
     
     def __getattr__(self, name):
         if not self._is_configured:
@@ -33,6 +34,8 @@ class AnotherLazySettings(object):
             else:
                 raise AttributeError
         else:
+            if self._wrapped:
+                return getattr(self._wrapped, name)
             raise AttributeError
     
     def _real_init(self):

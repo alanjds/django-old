@@ -21,6 +21,17 @@ __all__ = ['gettext', 'gettext_noop', 'gettext_lazy', 'ngettext',
 # settings).
 
 class TransProvider(object):
+    """
+    The purpose of this class is to store the actual translation function upon
+    receiving the first call to that function. After this is done, changes to
+    USE_I18N will have no effect to which function is served upon request. If
+    your tests rely on changing USE_I18N, you can delete all the functions
+    from _trans_provider.__dict__.
+    
+    Note that storing the function with setattr will have a noticeable
+    performance effect, as access to the function goes the normal path,
+    instead of using __getattr__.
+    """
     def __getattr__(self, name):
         from django.conf import settings
         if settings.USE_I18N:
@@ -31,6 +42,8 @@ class TransProvider(object):
         return getattr(trans_provider, name)
 
 _trans_provider = TransProvider()
+
+# The TransProvider class is no more needed, so remove it from the namespace.
 del TransProvider
 
 def gettext_noop(message):

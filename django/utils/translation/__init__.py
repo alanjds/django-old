@@ -20,47 +20,39 @@ __all__ = ['gettext', 'gettext_noop', 'gettext_lazy', 'ngettext',
 # replace the functions with their real counterparts (once we do access the
 # settings).
 
-_trans_provider = None
+class TransProvider(object):
+    def __getattr__(self, name):
+        from django.conf import settings
+        if settings.USE_I18N:
+            from django.utils.translation import trans_real as trans_provider
+        else:
+            from django.utils.translation import trans_null as trans_provider
+        setattr(self, name, getattr(trans_provider, name))
+        return getattr(trans_provider, name)
 
-def _setup_trans_provider():
-    global _trans_provider
-    from django.conf import settings
-    if settings.USE_I18N:
-        from django.utils.translation import trans_real as trans_provider
-    else:
-        from django.utils.translation import trans_null as trans_provider
-    _trans_provider = trans_provider
+_trans_provider = TransProvider()
+del TransProvider
 
 def gettext_noop(message):
     global _trans_provider
-    if not _trans_provider:
-        _setup_trans_provider() 
     return _trans_provider.gettext_noop(message)
 
 ugettext_noop = gettext_noop
 
 def gettext(message):
     global _trans_provider
-    if not _trans_provider:
-        _setup_trans_provider() 
     return _trans_provider.gettext(message)
 
 def ngettext(singular, plural, number):
     global _trans_provider
-    if not _trans_provider:
-        _setup_trans_provider() 
     return _trans_provider.ngettext(singular, plural, number)
 
 def ugettext(message):
     global _trans_provider
-    if not _trans_provider:
-        _setup_trans_provider() 
     return _trans_provider.ugettext(message)
 
 def ungettext(singular, plural, number):
     global _trans_provider
-    if not _trans_provider:
-        _setup_trans_provider() 
     return _trans_provider.ungettext(singular, plural, number)
 
 ngettext_lazy = lazy(ngettext, str)
@@ -70,68 +62,46 @@ ugettext_lazy = lazy(ugettext, unicode)
 
 def activate(language):
     global _trans_provider
-    if not _trans_provider:
-        _setup_trans_provider() 
     return _trans_provider.activate(language)
 
 def deactivate():
     global _trans_provider
-    if not _trans_provider:
-        _setup_trans_provider() 
     return _trans_provider.deactivate()
 
 def get_language():
     global _trans_provider
-    if not _trans_provider:
-        _setup_trans_provider() 
     return _trans_provider.get_language()
 
 def get_language_bidi():
     global _trans_provider
-    if not _trans_provider:
-        _setup_trans_provider() 
     return _trans_provider.get_language_bidi()
 
 def get_date_formats():
     global _trans_provider
-    if not _trans_provider:
-        _setup_trans_provider() 
     return _trans_provider.get_date_formats()
 
 def get_partial_date_formats():
     global _trans_provider
-    if not _trans_provider:
-        _setup_trans_provider() 
     return _trans_provider.get_partial_date_formats()
 
 def check_for_language(lang_code):
     global _trans_provider
-    if not _trans_provider:
-        _setup_trans_provider() 
     return _trans_provider.check_for_language(lang_code)
 
 def to_locale(language):
     global _trans_provider
-    if not _trans_provider:
-        _setup_trans_provider() 
     return _trans_provider.to_locale(language)
 
 def get_language_from_request(request):
     global _trans_provider
-    if not _trans_provider:
-        _setup_trans_provider() 
     return _trans_provider.get_language_from_request(request)
 
 def templatize(src):
     global _trans_provider
-    if not _trans_provider:
-        _setup_trans_provider() 
     return _trans_provider.templatize(src)
 
 def deactivate_all():
     global _trans_provider
-    if not _trans_provider:
-        _setup_trans_provider() 
     return _trans_provider.deactivate_all()
 
 def _string_concat(*strings):

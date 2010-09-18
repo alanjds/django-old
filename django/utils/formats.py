@@ -7,14 +7,20 @@ from django.utils.importlib import import_module
 from django.utils.encoding import smart_str
 from django.utils import dateformat, numberformat, datetime_safe
 
+# format_cache is a mapping from (format_type, lang) to the format string.
+# By using the cache, it is possible to avoid running get_format_modules
+# repeatedly.
+_format_cache = {}
+
 def get_format_modules(reverse=False):
     """
     Returns an iterator over the format modules found in the project and Django
     """
+    lang = get_language()
     modules = []
-    if not check_for_language(get_language()) or not settings.USE_L10N:
+    if not check_for_language(lang) or not settings.USE_L10N:
         return modules
-    locale = to_locale(get_language())
+    locale = to_locale(lang)
     if settings.FORMAT_MODULE_PATH:
         format_locations = [settings.FORMAT_MODULE_PATH + '.%s']
     else:
@@ -40,13 +46,21 @@ def get_format(format_type):
     language (locale), defaults to the format in the settings.
     format_type is the name of the format, e.g. 'DATE_FORMAT'
     """
-    format_type = smart_str(format_type)
+    global _format_cache
     if settings.USE_L10N:
-        for module in get_format_modules():
-            try:
-                return getattr(module, format_type)
-            except AttributeError:
-                pass
+        lang = get_language()
+        try:
+            return _format_cache[(format_type, lang)] \
+                or getattr(settings, format_type)
+        except KeyError:
+	    for module in get_format_modules():
+	        try:
+		    val = getattr(module, format_type)
+		    _format_cache[(format_type, lang)] = val
+		    return val
+	        except AttributeError:
+		    pass
+	    _format_cache[(format_type, lang)] = None
     return getattr(settings, format_type)
 
 def date_format(value, format=None):

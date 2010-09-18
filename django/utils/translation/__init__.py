@@ -20,20 +20,27 @@ __all__ = ['gettext', 'gettext_noop', 'gettext_lazy', 'ngettext',
 # replace the functions with their real counterparts (once we do access the
 # settings).
 
+# Cache the real translations provider in a global variable. Accessing settings
+# is slow in 1.2
+_trans_provider = None
+
 def delayed_loader(real_name, *args, **kwargs):
     """
     Call the real, underlying function.  We have a level of indirection here so
     that modules can use the translation bits without actually requiring
     Django's settings bits to be configured before import.
     """
-    from django.conf import settings
-    if settings.USE_I18N:
-        from django.utils.translation import trans_real as trans
-    else:
-        from django.utils.translation import trans_null as trans
+    global _trans_provider
+    if not _trans_provider:
+        from django.conf import settings
+        if settings.USE_I18N:
+            from django.utils.translation import trans_real as trans
+        else:
+            from django.utils.translation import trans_null as trans
+        _trans_provider = trans
 
     # Make the originally requested function call on the way out the door.
-    return getattr(trans, real_name)(*args, **kwargs)
+    return getattr(_trans_provider, real_name)(*args, **kwargs)
 
 g = globals()
 for name in __all__:

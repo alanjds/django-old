@@ -61,7 +61,7 @@ from django.utils.text import smart_split, unescape_string_literal, get_text_lis
 from django.utils.encoding import smart_unicode, force_unicode, smart_str
 from django.utils.translation import ugettext as _
 from django.utils.safestring import SafeData, EscapeData, mark_safe, mark_for_escaping
-from django.utils.formats import localize
+from django.utils.formats import localize, render_localize
 from django.utils.html import escape
 from django.utils.module_loading import module_has_submodule
 
@@ -825,9 +825,13 @@ def _render_value_in_context(value, context):
     means escaping, if required, and conversion to a unicode object. If value
     is a string, it is expected to have already been translated.
     """
-    value = localize(value)
+    is_safe, value = render_localize(value, context)
+    if is_safe:
+        return value
     value = force_unicode(value)
     if (context.autoescape and not isinstance(value, SafeData)) or isinstance(value, EscapeData):
+        # Note: this could be optimized a little. The escape call has force_unicode, mark_safe, and
+        # allow_lazy wrapped around the call. None of those make sense at this point of rendering.
         return escape(value)
     else:
         return value

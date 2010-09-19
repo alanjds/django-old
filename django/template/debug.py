@@ -2,7 +2,7 @@ from django.template import Lexer, Parser, tag_re, NodeList, VariableNode, Templ
 from django.utils.encoding import force_unicode
 from django.utils.html import escape
 from django.utils.safestring import SafeData, EscapeData
-from django.utils.formats import localize
+from django.utils.formats import localize, render_localize
 
 class DebugLexer(Lexer):
     def __init__(self, template_string, origin):
@@ -87,7 +87,9 @@ class DebugVariableNode(VariableNode):
     def render(self, context):
         try:
             output = self.filter_expression.resolve(context)
-            output = localize(output)
+            needs_escaping, output = render_localize(output, context)
+            if not needs_escaping:
+                return output
             output = force_unicode(output)
         except TemplateSyntaxError, e:
             if not hasattr(e, 'source'):

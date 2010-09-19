@@ -70,6 +70,7 @@ class Context(BaseContext):
         self.autoescape = autoescape
         self.current_app = current_app
         self.render_context = RenderContext()
+        self.formats = {}
         super(Context, self).__init__(dict_)
 
     def update(self, other_dict):

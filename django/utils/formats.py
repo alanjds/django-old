@@ -6,6 +6,7 @@ from django.utils.translation import get_language, to_locale, check_for_language
 from django.utils.importlib import import_module
 from django.utils.encoding import smart_str
 from django.utils import dateformat, numberformat, datetime_safe
+from django.utils.html import escape
 
 def get_format_modules(reverse=False):
     """
@@ -91,14 +92,23 @@ def localize(value):
         return value
 
 def render_localize(value, context):
+    """
+    Idea is to cache the desired format_str in context.formats. This
+    way it is not needed to each time go through get_format. We can
+    also get rid of escaping a number in rendering.
+    """
+    if settings.USE_L10N:
+        lang = get_language()
+    else:
+        lang = None
     if isinstance(value, (decimal.Decimal, float, int)):
         try:
-            number_format = context.formats[('NUMBER_FORMAT', get_language())]
+            number_format = context.formats[('NUMBER_FORMAT', lang)]
         except KeyError:
-            number_format = (get_format('DECIMAL_SEPARATOR'),
+            number_format = (escape(get_format('DECIMAL_SEPARATOR')),
                              get_format('NUMBER_GROUPING'),
-                             get_format('THOUSAND_SEPARATOR'))
-            context.formats[('NUMBER_FORMAT', get_language())] = number_format
+                             escape(get_format('THOUSAND_SEPARATOR')))
+            context.formats[('NUMBER_FORMAT', lang)] = number_format
             
         return (False, numberformat.format(
             value,
@@ -109,10 +119,10 @@ def render_localize(value, context):
         ))
     elif isinstance(value, datetime.datetime):
         try:
-            format = context.formats[('DATETIME_FORMAT', get_language())]
+            format = context.formats[('DATETIME_FORMAT', lang)]
         except KeyError:
             format = get_format('DATETIME_FORMAT')
-            context.formats[('DATETIME_FORMAT', get_language())] = smart_str(format)
+            context.formats[('DATETIME_FORMAT', lang)] = smart_str(format)
         return (False, dateformat.format(value, format))
     elif isinstance(value, datetime.date):
         return (False, date_format(value))

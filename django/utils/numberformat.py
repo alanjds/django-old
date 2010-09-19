@@ -12,6 +12,9 @@ def format(number, decimal_sep, decimal_pos, grouping=0, thousand_sep=''):
 
     """
     # sign
+    if isinstance(number, int) and not settings.USE_THOUSAND_SEPARATOR and not grouping \
+        and not decimal_pos:
+        return unicode(number)
     if float(number) < 0:
         sign = '-'
     else:

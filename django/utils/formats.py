@@ -90,6 +90,37 @@ def localize(value):
     else:
         return value
 
+def render_localize(value, context):
+    if isinstance(value, (decimal.Decimal, float, int)):
+        try:
+            number_format = context.formats[('NUMBER_FORMAT', get_language())]
+        except KeyError:
+            number_format = (get_format('DECIMAL_SEPARATOR'),
+                             get_format('NUMBER_GROUPING'),
+                             get_format('THOUSAND_SEPARATOR'))
+            context.formats[('NUMBER_FORMAT', get_language())] = number_format
+            
+        return (False, numberformat.format(
+            value,
+            number_format[0],
+            None,
+            number_format[1],
+            number_format[2],
+        ))
+    elif isinstance(value, datetime.datetime):
+        try:
+            format = context.formats[('DATETIME_FORMAT', get_language())]
+        except KeyError:
+            format = get_format('DATETIME_FORMAT')
+            context.formats[('DATETIME_FORMAT', get_language())] = smart_str(format)
+        return (False, dateformat.format(value, format))
+    elif isinstance(value, datetime.date):
+        return (False, date_format(value))
+    elif isinstance(value, datetime.time):
+        return (True, time_format(value, 'TIME_FORMAT'))
+    else:
+        return (True, value)
+
 def localize_input(value, default=None):
     """
     Checks if an input value is a localizable type and returns it

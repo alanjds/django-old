@@ -9,7 +9,7 @@ from django.template import TemplateSyntaxError, VariableDoesNotExist, BLOCK_TAG
 from django.template import get_library, Library, InvalidTemplateLibrary
 from django.template.smartif import IfParser, Literal
 from django.conf import settings
-from django.utils.encoding import smart_str, smart_unicode
+from django.utils.encoding import smart_str, smart_unicode, force_unicode
 from django.utils.safestring import mark_safe
 
 register = Library()
@@ -171,7 +171,7 @@ class ForNode(Node):
             else:
                 context[self.loopvars[0]] = item
             for node in self.nodelist_loop:
-                nodelist.append(node.render(context))
+                nodelist.append(force_unicode(node.render(context)))
             if pop_context:
                 # The loop variables were pushed on to the context so pop them
                 # off again. This is necessary because the tag lets the length
@@ -180,7 +180,7 @@ class ForNode(Node):
                 # context.
                 context.pop()
         context.pop()
-        return nodelist.render(context)
+        return u''.join(nodelist)
 
 class IfChangedNode(Node):
     child_nodelists = ('nodelist_true', 'nodelist_false')

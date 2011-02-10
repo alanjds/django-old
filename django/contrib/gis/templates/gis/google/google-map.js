@@ -14,11 +14,11 @@
   {% for event in polygon.events %}google.event.addListener({{ js_module }}.{{ dom_id }}_poly{{ forloop.parentloop.counter }}, {{ event }});{% endfor %}
   {% if calc_zoom %}paths={{ js_module }}.{{ dom_id }}_polyline{{ forloop.counter }}.getPaths(); for(i=0; i<paths.length(); i++){ for(j=0; j<paths[i].length(); j++){ bounds.extend(paths[i][j]); }}{% endif %}{% endfor %}  
   {% for polyline in polylines %}{{ js_module }}.{{ dom_id }}_polyline{{ forloop.counter }} = new {{ polyline }};
-  {{ js_module }}.{{ dom_id }}.addOverlay({{ js_module }}.{{ dom_id }}_polyline{{ forloop.counter }});
+  {{ js_module }}.{{ dom_id }}_polyline{{ forloop.counter }}.setMap({{ js_module }}.{{ dom_id }});
   {% for event in polyline.events %}GEvent.addListener({{ js_module }}.{{ dom_id }}_polyline{{ forloop.parentloop.counter }}, {{ event }}); {% endfor %}
   {% if calc_zoom %}path={{ js_module }}.{{ dom_id }}_polyline{{ forloop.counter }}.getPath(); for(i=0; i<path.length(); i++){ bounds.extend(path[i]); }{% endif %}{% endfor %}
   {% for marker in markers %}{{ js_module }}.{{ dom_id }}_marker{{ forloop.counter }} = new {{ marker }};
-  {{ js_module }}.{{ dom_id }}.addOverlay({{ js_module }}.{{ dom_id }}_marker{{ forloop.counter }});
+  {{ js_module }}.{{ dom_id }}_marker{{ forloop.counter }}.setMap({{ js_module }}.{{ dom_id }});
   {% for event in marker.events %}GEvent.addListener({{ js_module }}.{{ dom_id }}_marker{{ forloop.parentloop.counter }}, {{ event }}); {% endfor %}
   {% if calc_zoom %}bounds.extend({{ js_module }}.{{ dom_id }}_marker{{ forloop.counter }}.getPosition());{% endif %}{% endfor %}
   {% if calc_zoom %}{{ js_module }}.{{ dom_id }}.fitBounds(bounds);{% endif %}

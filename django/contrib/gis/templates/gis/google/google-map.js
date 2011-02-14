@@ -4,9 +4,12 @@
 {% block vars %}var geodjango = {};
 {% endblock vars %}{% block functions %}
 {% block load %}{{ js_module }}.{{ dom_id }}_load = function(){
-  {{ js_module }}.{{ dom_id }} = new google.maps.Map(document.getElementById("{{ dom_id }}"));
-  {{ js_module }}.{{ dom_id }}.setCenter(new google.maps.LatLng({{ center.1 }}, {{ center.0 }}));
-  {{ js_module }}.{{ dom_id }}.setZoom({{ zoom }});
+  var map_options = {
+    zoom: {{ zoom }},
+    center: google.maps.LatLng({{ center.1 }}, {{ center.0 }}),
+    mapTypeId: google.maps.MapTypeId.ROADMAP
+  }
+  {{ js_module }}.{{ dom_id }} = new google.maps.Map(document.getElementById("{{ dom_id }}"), map_options);
   {% block controls %}{% endblock %}
   {% if calc_zoom %}var bounds = new google.maps.LatLngBounds(); var i; var j;{% endif %}
   {% for kml_url in kml_urls %}{{ js_module }}.{{ dom_id }}_kml{{ forloop.counter }} = new google.maps.KmlLayer("{{ kml_url }}");

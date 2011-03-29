@@ -232,7 +232,8 @@ class WSGIRequest(http.HttpRequest):
     FILES = property(_get_files)
     REQUEST = property(_get_request)
 
-class WSGIHandler(base.BaseHandler):
+
+class WSGIWorker(base.BaseHandler):
     initLock = Lock()
     request_class = WSGIRequest
 
@@ -285,3 +286,25 @@ class WSGIHandler(base.BaseHandler):
         start_response(status, response_headers)
         return response
 
+
+class WSGIHandler(object):
+    def __init__(self, application=None):
+        from django.conf import settings
+
+        try:
+            wsgi_middlewares = settings.WSGI_MIDDLEWARE_FUNCTIONS
+        except AttributeError:
+            wsgi_middlewares = [WSGIWorker]
+
+        wsgi_middlewares.reverse()
+
+        if application:
+            self.application = wsgi_middlewares[0](application)
+        else:
+            self.application = wsgi_middlewares[0]()
+
+        for middleware in wsgi_middlewares[1:]:
+            self.application = middleware(self.application)
+
+    def __call__(self, *args, **kwargs):
+       return self.application(*args, **kwargs)

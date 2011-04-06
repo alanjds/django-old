@@ -20,7 +20,7 @@ class GoogleMap(object):
 
     def __init__(self, api_url=None, center=None, zoom=None, dom_id='map',
                  kml_urls=[], polylines=None, polygons=None, markers=None,
-                 using_sensor=False,
+                 using_sensor=False, min_zoom=None, max_zoom=None,
                  template='gis/google/google-map.js',
                  js_module='geodjango',
                  extra_context={}):
@@ -40,6 +40,8 @@ class GoogleMap(object):
         self.js_module = js_module
         self.template = template
         self.kml_urls = kml_urls
+        self.min_zoom = min_zoom
+        self.max_zoom = max_zoom
 
         # Does the user want any GMarker, GPolygon, and/or GPolyline overlays?
         overlay_info = [[GMarker, markers, 'markers'],
@@ -81,6 +83,8 @@ class GoogleMap(object):
                   'js_module' : self.js_module,
                   'kml_urls' : self.kml_urls,
                   'zoom' : self.zoom,
+                  'min_zoom': self.min_zoom,
+                  'max_zoom': self.max_zoom,
                   'polygons' : self.polygons,
                   'polylines' : self.polylines,
                   'icons': self.icons,

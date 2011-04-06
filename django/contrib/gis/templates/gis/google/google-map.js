@@ -4,6 +4,8 @@
 {% block load %}{{ js_module }}.{{ dom_id }}_load = function(){
   var map_options = {
     zoom: {{ zoom }},
+    {% if max_zoom %}maxZoom: {{ max_zoom }},{% endif %}
+    {% if min_zoom %}minZoom: {{ min_zoom }},{% endif %}
     center: google.maps.LatLng({{ center.1 }}, {{ center.0 }}),
     mapTypeId: google.maps.MapTypeId.ROADMAP
   }

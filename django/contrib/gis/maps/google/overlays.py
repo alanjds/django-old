@@ -270,8 +270,8 @@ class GMarker(GOverlayBase):
     """
 
     JS_CLASSNAME = 'Marker'
-    
-    def __init__(self, geom, title=None, draggable=False, icon=None, shadow=None):
+
+    def __init__(self, geom, title=None, draggable=False, icon=None, shadow=None, visible=True):
         """
         The GMarker object may initialize on GEOS Points or a parameter
         that may be instantiated into a GEOS point.
@@ -289,6 +289,9 @@ class GMarker(GOverlayBase):
 
          shadow:
            Sets the GImage used to display the shadow of the marker on the map.
+
+         visible:
+           Set if this marker will be visible at the map
         """
         # If a GEOS geometry isn't passed in, try to construct one.
         if isinstance(geom, basestring): geom = fromstr(geom)
@@ -304,6 +307,7 @@ class GMarker(GOverlayBase):
         self.draggable = draggable
         self.icon = icon
         self.shadow = shadow
+        self.visible = visible
         super(GMarker, self).__init__()
 
     def latlng_from_coords(self, coords):
@@ -317,4 +321,5 @@ class GMarker(GOverlayBase):
         if self.icon: result.append('icon: %s' % self.icon._to_param())
         if self.shadow: result.append('shadow: %s' % self.shadow_to_param())
         if self.draggable: result.append('draggable: true')
+        if not self.visible: result.append('visible: false')
         return '{%s}' % ','.join(result)

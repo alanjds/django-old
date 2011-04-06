@@ -51,9 +51,9 @@ class GEvent(object):
         return mark_safe('"%s", %s' %(self.event, self.action))
 
 class GOverlayBase(object):
-    
+
     JS_CLASSNAME = 'Overlay'
-    
+
     def __init__(self):
         self.events = []
 
@@ -75,9 +75,9 @@ class GPolygon(GOverlayBase):
     please see the Google Maps API Reference:
      http://code.google.com/apis/maps/documentation/javascript/reference.html#Polygon
     """
-    
+
     JS_CLASSNAME = 'Polygon'
-    
+
     def __init__(self, poly,
                  stroke_color='#0000ff', stroke_weight=2, stroke_opacity=1,
                  fill_color='#0000ff', fill_opacity=0.4):
@@ -141,9 +141,9 @@ class GPolyline(GOverlayBase):
     please see the Google Maps API Reference:
      http://code.google.com/apis/maps/documentation/javascript/reference.html#Polyline
     """
-    
+
     JS_CLASSNAME = 'Polyline'
-    
+
     def __init__(self, geom, color='#0000ff', weight=2, opacity=1):
         """
         The GPolyline object may be initialized on GEOS LineStirng, LinearRing,
@@ -196,7 +196,7 @@ class GImage(object):
     http://code.google.com/apis/maps/documentation/javascript/reference.html#MarkerImage
 
     Required Arguments:
-        
+
         url:
             The url of the image to be used as the icon on the map
 
@@ -210,19 +210,19 @@ class GImage(object):
                   iconsize=(15,10))
 
             Would indicate your custom icon was 15px wide and 10px height.
-            
+
         origin:
             a tuple representing the pixel coordinate of the upper left corner
             of the icon.  Used in conjuction with the size option to specify
             the sprite/subset of an image.  In the format: (x,y) ex.:
-            
+
             3rd_marker = GImage("/media/icon/12_markers.png",
                                size=(15,10),
                                origin=(30,0))
-                               
+
             Would indicate the image where it's upper left corner is at (30,0)
             and its lower right corner is (45,10).
-            
+
         anchor:
             a tuple representing the pixel coordinate relative to the top left
             corner of the icon image at which this icon is anchored to the map.
@@ -231,7 +231,7 @@ class GImage(object):
             coordinate system.)
 
     """
-    
+
     def __init__(self, url, size=None, origin=None, anchor=None):
         self.url = url
         self.size = size
@@ -243,7 +243,7 @@ class GImage(object):
         if self.size:
             args += ", new google.maps.Size(%s)" % self.size
             if self.origin:
-                args += ", new google.maps.Point(%s)" % self.origin 
+                args += ", new google.maps.Point(%s)" % self.origin
                 if self.anchor:
                     args += ", new google.maps.Point(%s)" % self.anchor
         args += ")"
@@ -268,7 +268,7 @@ class GMarker(GOverlayBase):
           return render_to_response('mytemplate.html',
                  {'google' : GoogleMap(markers=[marker])})
     """
-    
+
     JS_CLASSNAME = 'Marker'
     
     def __init__(self, geom, title=None, draggable=False, icon=None, shadow=None):
@@ -282,11 +282,11 @@ class GMarker(GOverlayBase):
 
          draggable:
            Draggable option for GMarker, disabled by default.
-           
+
          icon:
            Sets the GImage used to display the marker on the map.
            If not set google maps will use the default marker icon.
-           
+
          shadow:
            Sets the GImage used to display the shadow of the marker on the map.
         """

@@ -21,7 +21,9 @@ class GoogleMap(object):
 
     def __init__(self, api_url=None, center=None, zoom=None, dom_id='map',
                  kml_urls=[], polylines=None, polygons=None, markers=None,
-                 using_sensor=False, min_zoom=None, max_zoom=None, street_view_control=True,
+                 using_sensor=False, min_zoom=None, max_zoom=None, keyboard_shortcuts=True,
+                 street_view_control=True, overview_map_control=False, pan_control=False,
+                 disable_double_click_zoom=False,
                  template='gis/google/google-map.js',
                  js_module='geodjango',
                  extra_context={}):
@@ -43,7 +45,11 @@ class GoogleMap(object):
         self.kml_urls = kml_urls
         self.min_zoom = min_zoom
         self.max_zoom = max_zoom
+        self.keyboard_shortcuts = keyboard_shortcuts
         self.street_view_control = street_view_control
+        self.overview_map_control = overview_map_control
+        self.pan_control = pan_control
+        self.disable_double_click_zoom = disable_double_click_zoom
 
         # Does the user want any GMarker, GPolygon, and/or GPolyline overlays?
         overlay_info = [[GMarker, markers, 'markers'],
@@ -87,11 +93,15 @@ class GoogleMap(object):
                   'zoom' : self.zoom,
                   'min_zoom': self.min_zoom,
                   'max_zoom': self.max_zoom,
+                  'keyboard_shortcuts': json.dumps(self.keyboard_shortcuts),
                   'polygons' : self.polygons,
                   'polylines' : self.polylines,
                   'icons': self.icons,
                   'markers' : self.markers,
                   'street_view_control': json.dumps(self.street_view_control),
+                  'overview_map_control': self.overview_map_control,
+                  'pan_control': self.pan_control,
+                  'disable_double_click_zoom': self.disable_double_click_zoom,
                   }
         params.update(self.extra_context)
         return render_to_string(self.template, params)

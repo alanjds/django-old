@@ -2,6 +2,7 @@ from django.conf import settings
 from django.contrib.gis import geos
 from django.template.loader import render_to_string
 from django.utils.safestring import mark_safe
+from django.utils import simplejson as json
 
 class GoogleMapException(Exception): pass
 from django.contrib.gis.maps.google.overlays import GPolygon, GPolyline, GMarker, GImage
@@ -20,7 +21,7 @@ class GoogleMap(object):
 
     def __init__(self, api_url=None, center=None, zoom=None, dom_id='map',
                  kml_urls=[], polylines=None, polygons=None, markers=None,
-                 using_sensor=False, min_zoom=None, max_zoom=None,
+                 using_sensor=False, min_zoom=None, max_zoom=None, street_view_control=True,
                  template='gis/google/google-map.js',
                  js_module='geodjango',
                  extra_context={}):
@@ -42,6 +43,7 @@ class GoogleMap(object):
         self.kml_urls = kml_urls
         self.min_zoom = min_zoom
         self.max_zoom = max_zoom
+        self.street_view_control = street_view_control
 
         # Does the user want any GMarker, GPolygon, and/or GPolyline overlays?
         overlay_info = [[GMarker, markers, 'markers'],
@@ -89,6 +91,7 @@ class GoogleMap(object):
                   'polylines' : self.polylines,
                   'icons': self.icons,
                   'markers' : self.markers,
+                  'street_view_control': json.dumps(self.street_view_control),
                   }
         params.update(self.extra_context)
         return render_to_string(self.template, params)

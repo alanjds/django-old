@@ -8,6 +8,7 @@
     zoom: {{ zoom }},
     {% if max_zoom %}maxZoom: {{ max_zoom }},{% endif %}
     {% if min_zoom %}minZoom: {{ min_zoom }},{% endif %}
+    streetViewControl: {{ street_view_control }},
     center: google.maps.LatLng({{ center.1 }}, {{ center.0 }}),
     mapTypeId: google.maps.MapTypeId.ROADMAP
   }

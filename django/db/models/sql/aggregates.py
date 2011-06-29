@@ -77,6 +77,7 @@ class Aggregate(object):
 
     def as_sql(self, qn, connection):
         "Return the aggregate, rendered as SQL."
+
         query_params = []
         if hasattr(self.col, 'as_sql'):
             field_name = self.col.as_sql(qn, connection)

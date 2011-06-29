@@ -22,6 +22,7 @@ class Aggregate(object):
     is_ordinal = False
     is_computed = False
     sql_template = '%(function)s(%(field)s)'
+    conditional_template = "CASE WHEN %(condition)s THEN %(field_name)s ELSE null END"
 
     def __init__(self, col, source=None, is_summary=False, condition=None, **extra):
         """Instantiate an SQL aggregate
@@ -86,9 +87,10 @@ class Aggregate(object):
         if self.condition:
             condition = self.condition.as_sql(qn, connection)
             query_params = condition[1]
-            conditional_field = \
-'CASE WHEN %(condition)s THEN %(field_name)s ELSE null END' \
-            % {'condition': condition[0], 'field_name': field_name} 
+            conditional_field = self.conditional_template % {
+                'condition': condition[0], 
+                'field_name': field_name
+            } 
             params = {
                 'function': self.sql_function,
                 'field': conditional_field,

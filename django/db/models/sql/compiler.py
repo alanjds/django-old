@@ -127,7 +127,6 @@ class SQLCompiler(object):
             if nowait and not self.connection.features.has_select_for_update_nowait:
                 raise DatabaseError('NOWAIT is not supported on this database backend.')
             result.append(self.connection.ops.for_update_sql(nowait=nowait))
-
         return ' '.join(result), tuple(params)
 
     def as_nested_sql(self):
@@ -755,11 +754,7 @@ class SQLCompiler(object):
                 return
 
         cursor = self.connection.cursor()
-        try:
-            cursor.execute(sql, params)
-        except Exception, e:
-            import pdb; pdb.set_trace()
-            raise
+        cursor.execute(sql, params)
 
         if not result_type:
             return cursor

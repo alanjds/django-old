@@ -65,9 +65,11 @@ class SQLEvaluator(object):
         for child in node.children:
             if hasattr(child, 'evaluate'):
                 sql, params = child.evaluate(self, qn, connection)
+                if isinstance(sql, tuple):
+                    expression_params.extend(sql[1])
+                    sql = sql[0]
             else:
                 sql, params = '%s', (child,)
-
             if len(getattr(child, 'children', [])) > 1:
                 format = '(%s)'
             else:

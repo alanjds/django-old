@@ -76,6 +76,10 @@ class BaseAggregateTestCase(TestCase):
         vals = Store.objects.aggregate(Max("books__authors__age"))
         self.assertEqual(len(vals), 1)
         self.assertEqual(vals["books__authors__age__max"], 57)
+        
+        vals = Store.objects.aggregate(Max("books__authors__age", only=Q(books__authors__age__lt=56)))
+        self.assertEqual(len(vals), 1)
+        self.assertEqual(vals["books__authors__age__max"], 46)
 
         vals = Author.objects.aggregate(Min("book__publisher__num_awards"))
         self.assertEqual(len(vals), 1)
@@ -214,6 +218,16 @@ class BaseAggregateTestCase(TestCase):
                     "pk": 1,
                     "isbn": "159059725",
                     "mean_age": 34.5,
+                }
+            ]
+        )
+        books = Book.objects.filter(pk=1).annotate(mean_age=Avg('authors__age', only=Q(authors__age__lt=35))).values('pk', 'isbn', 'mean_age')
+        self.assertEqual(
+            list(books), [
+                {
+                    "pk": 1,
+                    "isbn": "159059725",
+                    "mean_age": 34.0,
                 }
             ]
         )
@@ -419,6 +433,13 @@ class BaseAggregateTestCase(TestCase):
             publishers, [
                 "Apress",
                 "Prentice Hall",
+                "Expensive Publisher",
+            ],
+            lambda p: p.name,
+        )
+        publishers = Publisher.objects.annotate(num_books=Count("book__id", only=Q(book__id__gt=5))).filter(num_books__gt=1, book__price__lt=Decimal("40.0")).order_by("pk")
+        self.assertQuerysetEqual(
+            publishers, [
                 "Expensive Publisher",
             ],
             lambda p: p.name,

@@ -137,6 +137,7 @@ class WhereNode(tree.Node):
         it.
         """
         lvalue, lookup_type, value_annot, params_or_value = child
+        additional_params = []
         if hasattr(lvalue, 'process'):
             try:
                 lvalue, params = lvalue.process(lookup_type, params_or_value, connection)
@@ -153,7 +154,7 @@ class WhereNode(tree.Node):
             field_sql = lvalue.as_sql(qn, connection)
             if isinstance(field_sql, tuple):
                 # It returned also params
-                params.extend(field_sql[1])
+                additional_params.extend(field_sql[1])
                 field_sql = field_sql[0]
 
         if value_annot is datetime.datetime:
@@ -163,6 +164,9 @@ class WhereNode(tree.Node):
 
         if hasattr(params, 'as_sql'):
             extra, params = params.as_sql(qn, connection)
+            if isinstance(extra, tuple):
+                params = params + tuple(extra[1])
+                extra = extra[0]
             cast_sql = ''
         else:
             extra = ''
@@ -170,7 +174,8 @@ class WhereNode(tree.Node):
             and connection.features.interprets_empty_strings_as_nulls):
             lookup_type = 'isnull'
             value_annot = True
-
+        additional_params.extend(params)
+        params = additional_params
         if lookup_type in connection.operators:
             format = "%s %%s %%s" % (connection.ops.lookup_cast(lookup_type),)
             return (format % (field_sql,

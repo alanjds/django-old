@@ -170,10 +170,12 @@ class WhereNode(tree.Node):
             cast_sql = ''
         else:
             extra = ''
+
         if (len(params) == 1 and params[0] == '' and lookup_type == 'exact'
             and connection.features.interprets_empty_strings_as_nulls):
             lookup_type = 'isnull'
             value_annot = True
+
         additional_params.extend(params)
         params = additional_params
         if lookup_type in connection.operators:

@@ -70,6 +70,7 @@ class SQLEvaluator(object):
                     sql = sql[0]
             else:
                 sql, params = '%s', (child,)
+
             if len(getattr(child, 'children', [])) > 1:
                 format = '(%s)'
             else:

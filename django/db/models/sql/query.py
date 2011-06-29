@@ -998,7 +998,7 @@ class Query(object):
             field_name = field_list[0]
             source = opts.get_field(field_name)
             col = field_name
- 
+
         if only:
             original_where = self.where
             aggregate.condition = self.where_class()
@@ -1010,7 +1010,6 @@ class Query(object):
             self.where = original_where
         # Add the aggregate to the query
         aggregate.add_to_query(self, alias, col=col, source=source, is_summary=is_summary)
- 
 
     def add_filter(self, filter_expr, connector=AND, negate=False, trim=False,
             can_reuse=None, process_extras=True, force_having=False):

@@ -1001,12 +1001,17 @@ class Query(object):
 
         if only:
             original_where = self.where
+            original_having = self.having
             aggregate.condition = self.where_class()
             self.where = aggregate.condition
+            self.having = self.where_class()
             original_alias_map = self.alias_map.keys()[:]
             self.add_q(only, used_aliases=set(original_alias_map)) 
             if original_alias_map != self.alias_map.keys():
-                raise Exception("Aggregate's only condition can not require additional joins, Original joins: %s, joins after: %s" % (original_alias_map, self.alias_map.keys()))
+                raise FieldError("Aggregate's only condition can not require additional joins, Original joins: %s, joins after: %s" % (original_alias_map, self.alias_map.keys()))
+            if self.having.children:
+                raise FieldError("Aggregate's only condition can not reference annotated fields")
+            self.having = original_having
             self.where = original_where
         # Add the aggregate to the query
         aggregate.add_to_query(self, alias, col=col, source=source, is_summary=is_summary)

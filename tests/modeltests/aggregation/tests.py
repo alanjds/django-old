@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from django.db.models import Avg, Sum, Count, Max, Min
 from django.db.models import Q, F
+from django.core.exceptions import FieldError
 from django.test import TestCase, Approximate
 
 from models import Author, Publisher, Book, Store
@@ -135,6 +136,11 @@ class BaseAggregateTestCase(TestCase):
             ],
             lambda b: (b.name, b.num_authors)
         )
+        
+        def raises_exception():
+            list(Book.objects.annotate(num_authors=Count("authors")).annotate(num_authors2=Count("authors", only=Q(num_authors__gt=1))).order_by("name"))
+
+        self.assertRaises(FieldError, raises_exception)
 
     def test_backwards_m2m_annotate(self):
         authors = Author.objects.filter(name__contains="a").annotate(Avg("book__rating")).order_by("name")

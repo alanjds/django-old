@@ -151,6 +151,10 @@ class WhereNode(tree.Node):
         else:
             # A smart object with an as_sql() method.
             field_sql = lvalue.as_sql(qn, connection)
+            if isinstance(field_sql, tuple):
+                # It returned also params
+                params.extend(field_sql[1])
+                field_sql = field_sql[0]
 
         if value_annot is datetime.datetime:
             cast_sql = connection.ops.datetime_cast_sql()
@@ -162,7 +166,6 @@ class WhereNode(tree.Node):
             cast_sql = ''
         else:
             extra = ''
-
         if (len(params) == 1 and params[0] == '' and lookup_type == 'exact'
             and connection.features.interprets_empty_strings_as_nulls):
             lookup_type = 'isnull'

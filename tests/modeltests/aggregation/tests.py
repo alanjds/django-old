@@ -2,6 +2,7 @@ import datetime
 from decimal import Decimal
 
 from django.db.models import Avg, Sum, Count, Max, Min
+from django.db.models import Q, F
 from django.test import TestCase, Approximate
 
 from models import Author, Publisher, Book, Store
@@ -16,20 +17,44 @@ class BaseAggregateTestCase(TestCase):
     def test_single_aggregate(self):
         vals = Author.objects.aggregate(Avg("age"))
         self.assertEqual(vals, {"age__avg": Approximate(37.4, places=1)})
+        vals = Author.objects.aggregate(Sum("age", only=Q(age__gt=29)))
+        self.assertEqual(vals, {"age__sum": 254})
+        vals = Author.objects.aggregate(Sum("age", only=Q(name__icontains='jaco')|Q(name__icontains='adrian')))
+        self.assertEqual(vals, {"age__sum": 69})
 
     def test_multiple_aggregates(self):
         vals = Author.objects.aggregate(Sum("age"), Avg("age"))
         self.assertEqual(vals, {"age__sum": 337, "age__avg": Approximate(37.4, places=1)})
+        vals = Author.objects.aggregate(Sum("age", only=Q(age__gt=29)), Avg("age"))
+        self.assertEqual(vals, {"age__sum": 254, "age__avg": Approximate(37.4, places=1)})
 
     def test_filter_aggregate(self):
         vals = Author.objects.filter(age__gt=29).aggregate(Sum("age"))
         self.assertEqual(len(vals), 1)
         self.assertEqual(vals["age__sum"], 254)
+        vals = Author.objects.filter(age__gt=29).aggregate(Sum("age", only=Q(age__lt=29)))
+        # If there are no matching aggregates, then None, not 0 is the answer.
+        self.assertEqual(vals["age__sum"], None)
 
     def test_related_aggregate(self):
         vals = Author.objects.aggregate(Avg("friends__age"))
         self.assertEqual(len(vals), 1)
         self.assertAlmostEqual(vals["friends__age__avg"], 34.07, places=2)
+
+        vals = Author.objects.aggregate(Avg("friends__age", only=Q(age__lt=29)))
+        self.assertEqual(len(vals), 1)
+        self.assertAlmostEqual(vals["friends__age__avg"], 33.67, places=2)
+        vals2 = Author.objects.filter(age__lt=29).aggregate(Avg("friends__age"))
+        self.assertEqual(vals, vals2)
+
+        vals = Author.objects.aggregate(Avg("friends__age", only=Q(friends__age__lt=35)))
+        self.assertEqual(len(vals), 1)
+        self.assertAlmostEqual(vals["friends__age__avg"], 28.75, places=2)
+
+        # The average age of author's friends, whose age is lower than the authors age.
+        vals = Author.objects.aggregate(Avg("friends__age", only=Q(friends__age__lt=F('age'))))
+        self.assertEqual(len(vals), 1)
+        self.assertAlmostEqual(vals["friends__age__avg"], 30.43, places=2)
 
         vals = Book.objects.filter(rating__lt=4.5).aggregate(Avg("authors__age"))
         self.assertEqual(len(vals), 1)
@@ -269,6 +294,16 @@ class BaseAggregateTestCase(TestCase):
 
         vals = Book.objects.aggregate(Count("rating", distinct=True))
         self.assertEqual(vals, {"rating__count": 4})
+        vals = Book.objects.aggregate(
+            low_count=Count("rating", only=Q(rating__lt=4)), 
+            high_count=Count("rating", only=Q(rating__gte=4))
+        )
+        self.assertEqual(vals, {"low_count": 1, 'high_count': 5})
+        vals = Book.objects.aggregate(
+            low_count=Count("rating", distinct=True, only=Q(rating__lt=4)), 
+            high_count=Count("rating", distinct=True, only=Q(rating__gte=4))
+        )
+        self.assertEqual(vals, {"low_count": 1, 'high_count': 3})
 
     def test_fkey_aggregate(self):
         explicit = list(Author.objects.annotate(Count('book__id')))

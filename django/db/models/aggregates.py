@@ -6,10 +6,11 @@ class Aggregate(object):
     """
     Default Aggregate definition.
     """
-    def __init__(self, lookup, **extra):
+    def __init__(self, lookup, only=None, **extra):
         """Instantiate a new aggregate.
 
          * lookup is the field on which the aggregate operates.
+         * only is a Q-object used in conditional aggregation.
          * extra is a dictionary of additional data to provide for the
            aggregate definition
 
@@ -18,6 +19,8 @@ class Aggregate(object):
         """
         self.lookup = lookup
         self.extra = extra
+        self.only = only
+        self.condition = None
 
     def _default_alias(self):
         return '%s__%s' % (self.lookup, self.name.lower())
@@ -42,7 +45,7 @@ class Aggregate(object):
            summary value rather than an annotation.
         """
         klass = getattr(query.aggregates_module, self.name)
-        aggregate = klass(col, source=source, is_summary=is_summary, **self.extra)
+        aggregate = klass(col, source=source, is_summary=is_summary, condition=self.condition, **self.extra)
         query.aggregates[alias] = aggregate
 
 class Avg(Aggregate):

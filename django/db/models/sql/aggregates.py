@@ -23,7 +23,7 @@ class Aggregate(object):
     is_computed = False
     sql_template = '%(function)s(%(field)s)'
 
-    def __init__(self, col, source=None, is_summary=False, **extra):
+    def __init__(self, col, source=None, is_summary=False, condition=None, **extra):
         """Instantiate an SQL aggregate
 
          * col is a column reference describing the subject field
@@ -52,6 +52,7 @@ class Aggregate(object):
         self.source = source
         self.is_summary = is_summary
         self.extra = extra
+        self.condition = condition
 
         # Follow the chain of aggregate sources back until you find an
         # actual field, or an aggregate that forces a particular output
@@ -75,21 +76,31 @@ class Aggregate(object):
 
     def as_sql(self, qn, connection):
         "Return the aggregate, rendered as SQL."
-
+        query_params = []
         if hasattr(self.col, 'as_sql'):
             field_name = self.col.as_sql(qn, connection)
         elif isinstance(self.col, (list, tuple)):
             field_name = '.'.join([qn(c) for c in self.col])
         else:
             field_name = self.col
-
-        params = {
-            'function': self.sql_function,
-            'field': field_name
-        }
+        if self.condition:
+            condition = self.condition.as_sql(qn, connection)
+            query_params = condition[1]
+            conditional_field = \
+'CASE WHEN %(condition)s THEN %(field_name)s ELSE null END' \
+            % {'condition': condition[0], 'field_name': field_name} 
+            params = {
+                'function': self.sql_function,
+                'field': conditional_field,
+            } 
+        else:
+            params = {
+                'function': self.sql_function,
+                'field': field_name
+            }
         params.update(self.extra)
 
-        return self.sql_template % params
+        return (self.sql_template % params, query_params)
 
 
 class Avg(Aggregate):

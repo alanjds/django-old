@@ -956,6 +956,8 @@ class Query(object):
         """
         opts = model._meta
         field_list = aggregate.lookup.split(LOOKUP_SEP)
+        only = aggregate.only
+        join_list = []
         if len(field_list) == 1 and aggregate.lookup in self.aggregates:
             # Aggregate is over an annotation
             field_name = field_list[0]
@@ -964,6 +966,8 @@ class Query(object):
             if not is_summary:
                 raise FieldError("Cannot compute %s('%s'): '%s' is an aggregate" % (
                     aggregate.name, field_name, field_name))
+            if only:
+                raise FieldError("Cannot use aggregated fields in conditional aggregates")
         elif ((len(field_list) > 1) or
             (field_list[0] not in [i.name for i in opts.fields]) or
             self.group_by is None or
@@ -994,9 +998,21 @@ class Query(object):
             field_name = field_list[0]
             source = opts.get_field(field_name)
             col = field_name
-
+        
+        if only:
+            original_where = self.where
+            aggregate.condition = self.where_class()
+            self.where = aggregate.condition
+            original_alias_map = self.alias_map.keys()[:]
+            self.add_q(only, used_aliases=set(original_alias_map)) 
+            if original_alias_map != self.alias_map.keys():
+                raise Exception("Aggregate's only condition can not require additional joins, Original joins: %s, joins after: %s" % (original_alias_map, self.alias_map.keys()))
+            self.where = original_where
         # Add the aggregate to the query
         aggregate.add_to_query(self, alias, col=col, source=source, is_summary=is_summary)
+    
+            
+        
 
     def add_filter(self, filter_expr, connector=AND, negate=False, trim=False,
             can_reuse=None, process_extras=True, force_having=False):

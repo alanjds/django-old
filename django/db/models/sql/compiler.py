@@ -60,8 +60,6 @@ class SQLCompiler(object):
         self.pre_sql_setup()
         out_cols, c_params = self.get_columns(with_col_aliases)
         ordering, ordering_group_by = self.get_ordering()
-        params = []
-        params.extend(c_params)
 
         # This must come after 'select' and 'ordering' -- see docstring of
         # get_from_clause() for details.
@@ -71,8 +69,11 @@ class SQLCompiler(object):
 
         where, w_params = self.query.where.as_sql(qn=qn, connection=self.connection)
         having, h_params = self.query.having.as_sql(qn=qn, connection=self.connection)
+        params = []
         for val in self.query.extra_select.itervalues():
             params.extend(val[1])
+        # Extra-select comes before aggregation in the select list
+        params.extend(c_params)
 
         result = ['SELECT']
         if self.query.distinct:

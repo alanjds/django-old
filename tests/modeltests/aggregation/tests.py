@@ -20,8 +20,11 @@ class BaseAggregateTestCase(TestCase):
         self.assertEqual(vals, {"age__avg": Approximate(37.4, places=1)})
         vals = Author.objects.aggregate(Sum("age", only=Q(age__gt=29)))
         self.assertEqual(vals, {"age__sum": 254})
+        vals = Author.objects.extra(select={'testparams':'age < %s'}, select_params=[0])\
+               .aggregate(Sum("age", only=Q(age__gt=29)))
+        self.assertEqual(vals, {"age__sum": 254})
         vals = Author.objects.aggregate(Sum("age", only=Q(name__icontains='jaco')|Q(name__icontains='adrian')))
-        self.assertEqual(vals, {"age__sum": 69})
+        self.assertEqual(vals, {"age__sum": 69}) 
 
     def test_multiple_aggregates(self):
         vals = Author.objects.aggregate(Sum("age"), Avg("age"))
@@ -110,6 +113,20 @@ class BaseAggregateTestCase(TestCase):
             b.name,
             u'The Definitive Guide to Django: Web Development Done Right'
         )
+        self.assertEqual(b.mean_age, 34.5)
+
+        # Test extra-select
+        books = Book.objects.annotate(mean_age=Avg("authors__age"))
+        books = books.annotate(mean_age2=Avg('authors__age', only=Q(authors__age__gte=0)))
+        books = books.extra(select={'testparams': 'publisher_id = %s'}, select_params=[1])
+        b = books.get(pk=1)
+        self.assertEqual(b.mean_age, 34.5)
+        self.assertEqual(b.mean_age2, 34.5)
+        self.assertEqual(b.testparams, True)
+        # Test relabel_aliases
+        books = books.exclude(authors__in=Author.objects.annotate(book_rating=Min('book__rating', only=Q(pk__gte=1))).filter(book_rating__lt=0))
+        print books.query
+        b = books.get(pk=1)
         self.assertEqual(b.mean_age, 34.5)
 
     def test_annotate_m2m(self):

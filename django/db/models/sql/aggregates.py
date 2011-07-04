@@ -1,6 +1,7 @@
 """
 Classes to represent the default SQL aggregate functions
 """
+from django.db.models.sql.expressions import SQLEvaluator
 
 class AggregateField(object):
     """An internal field mockup used to identify aggregates in the
@@ -34,6 +35,7 @@ class Aggregate(object):
            the column reference. If the aggregate is not an ordinal or
            computed type, this reference is used to determine the coerced
            output type of the aggregate.
+         * condition is used in conditional aggregation
          * extra is a dictionary of additional data to provide for the
            aggregate definition
 
@@ -68,30 +70,42 @@ class Aggregate(object):
                 tmp = computed_aggregate_field
             else:
                 tmp = tmp.source
-
+        
+        # We don't know the real source of this aggregate, and the
+        # aggregate doesn't define ordinal or computed either. So
+        # we default to computed for these cases. 
+        if tmp is None:
+            tmp = computed_aggregate_field
         self.field = tmp
+
 
     def relabel_aliases(self, change_map):
         if isinstance(self.col, (list, tuple)):
             self.col = (change_map.get(self.col[0], self.col[0]), self.col[1])
+        else:
+            self.col.relabel_aliases(change_map)
         if self.condition:
             self.condition.relabel_aliases(change_map)
 
     def as_sql(self, qn, connection):
         "Return the aggregate, rendered as SQL."
 
-        query_params = []
+        condition_params = []
+        col_params = []
         if hasattr(self.col, 'as_sql'):
-            field_name = self.col.as_sql(qn, connection)
+            if isinstance(self.col, SQLEvaluator):
+                field_name, col_params = self.col.as_sql(qn, connection)
+            else:
+                field_name = self.col.as_sql(qn, connection)
+            
         elif isinstance(self.col, (list, tuple)):
             field_name = '.'.join([qn(c) for c in self.col])
         else:
             field_name = self.col
         if self.condition:
-            condition = self.condition.as_sql(qn, connection)
-            query_params = condition[1]
+            condition, condition_params = self.condition.as_sql(qn, connection)
             conditional_field = self.conditional_template % {
-                'condition': condition[0], 
+                'condition': condition, 
                 'field_name': field_name
             } 
             params = {
@@ -104,8 +118,8 @@ class Aggregate(object):
                 'field': field_name
             }
         params.update(self.extra)
-
-        return (self.sql_template % params, query_params)
+        condition_params.extend(col_params)
+        return (self.sql_template % params, condition_params)
 
 
 class Avg(Aggregate):

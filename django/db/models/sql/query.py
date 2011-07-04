@@ -955,49 +955,56 @@ class Query(object):
         Adds a single aggregate expression to the Query
         """
         opts = model._meta
-        field_list = aggregate.lookup.split(LOOKUP_SEP)
         only = aggregate.only
-        join_list = []
-        if len(field_list) == 1 and aggregate.lookup in self.aggregates:
-            # Aggregate is over an annotation
-            field_name = field_list[0]
-            col = field_name
-            source = self.aggregates[field_name]
-            if not is_summary:
-                raise FieldError("Cannot compute %s('%s'): '%s' is an aggregate" % (
-                    aggregate.name, field_name, field_name))
-            if only:
-                raise FieldError("Cannot use aggregated fields in conditional aggregates")
-        elif ((len(field_list) > 1) or
-            (field_list[0] not in [i.name for i in opts.fields]) or
-            self.group_by is None or
-            not is_summary):
-            # If:
-            #   - the field descriptor has more than one part (foo__bar), or
-            #   - the field descriptor is referencing an m2m/m2o field, or
-            #   - this is a reference to a model field (possibly inherited), or
-            #   - this is an annotation over a model field
-            # then we need to explore the joins that are required.
-
-            field, source, opts, join_list, last, _ = self.setup_joins(
-                field_list, opts, self.get_initial_alias(), False)
-
-            # Process the join chain to see if it can be trimmed
-            col, _, join_list = self.trim_joins(source, join_list, last, False)
-
-            # If the aggregate references a model or field that requires a join,
-            # those joins must be LEFT OUTER - empty join rows must be returned
-            # in order for zeros to be returned for those aggregates.
-            for column_alias in join_list:
-                self.promote_alias(column_alias, unconditional=True)
-
-            col = (join_list[-1], col)
+        if hasattr(aggregate.lookup, 'evaluate'):
+            # If lookup is a query expression, evaluate it
+            col = SQLEvaluator(aggregate.lookup, self, promote_joins=True)
+            # TODO: find out the real source of this field. If any field has
+            # is_computed, then source can be set to is_computed.
+            source = None
         else:
-            # The simplest cases. No joins required -
-            # just reference the provided column alias.
-            field_name = field_list[0]
-            source = opts.get_field(field_name)
-            col = field_name
+            field_list = aggregate.lookup.split(LOOKUP_SEP)
+            join_list = []
+            if len(field_list) == 1 and aggregate.lookup in self.aggregates:
+                # Aggregate is over an annotation
+                field_name = field_list[0]
+                col = field_name
+                source = self.aggregates[field_name]
+                if not is_summary:
+                    raise FieldError("Cannot compute %s('%s'): '%s' is an aggregate" % (
+                        aggregate.name, field_name, field_name))
+                if only:
+                    raise FieldError("Cannot use aggregated fields in conditional aggregates")
+            elif ((len(field_list) > 1) or
+                (field_list[0] not in [i.name for i in opts.fields]) or
+                self.group_by is None or
+                not is_summary):
+                # If:
+                #   - the field descriptor has more than one part (foo__bar), or
+                #   - the field descriptor is referencing an m2m/m2o field, or
+                #   - this is a reference to a model field (possibly inherited), or
+                #   - this is an annotation over a model field
+                # then we need to explore the joins that are required.
+
+                field, source, opts, join_list, last, _ = self.setup_joins(
+                    field_list, opts, self.get_initial_alias(), False)
+
+                # Process the join chain to see if it can be trimmed
+                col, _, join_list = self.trim_joins(source, join_list, last, False)
+
+                # If the aggregate references a model or field that requires a join,
+                # those joins must be LEFT OUTER - empty join rows must be returned
+                # in order for zeros to be returned for those aggregates.
+                for column_alias in join_list:
+                    self.promote_alias(column_alias, unconditional=True)
+
+                col = (join_list[-1], col)
+            else:
+                # The simplest cases. No joins required -
+                # just reference the provided column alias.
+                field_name = field_list[0]
+                source = opts.get_field(field_name)
+                col = field_name
 
         if only:
             original_where = self.where

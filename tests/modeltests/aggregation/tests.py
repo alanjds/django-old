@@ -123,11 +123,25 @@ class BaseAggregateTestCase(TestCase):
         self.assertEqual(b.mean_age, 34.5)
         self.assertEqual(b.mean_age2, 34.5)
         self.assertEqual(b.testparams, True)
+
         # Test relabel_aliases
-        books = books.exclude(authors__in=Author.objects.annotate(book_rating=Min('book__rating', only=Q(pk__gte=1))).filter(book_rating__lt=0))
-        print books.query
+        excluded_authors = Author.objects.annotate(book_rating=Min(F('book__rating') + 5, only=Q(pk__gte=1)))
+        excluded_authors = excluded_authors.filter(book_rating__lt=0)
+        books = books.exclude(authors__in=excluded_authors)
         b = books.get(pk=1)
         self.assertEqual(b.mean_age, 34.5)
+
+        # Test joins in F-based annotation
+        books = Book.objects.annotate(oldest=Max(F('authors__age')))
+        books = books.values_list('rating', 'oldest').order_by('rating', 'oldest')
+        self.assertEqual(
+            list(books),
+            [(3.0, 45), (4.0, 29), (4.0, 37), (4.0, 57), (4.5, 35), (5.0, 57)]
+        )
+
+        publishers = Publisher.objects.annotate(avg_rating=Avg(F('book__rating') - 0))
+        publishers = publishers.values_list('id', 'avg_rating').order_by('id')
+        self.assertEqual(list(publishers), [(1, 4.25), (2, 3.0), (3, 4.0), (4, 5.0), (5, None)])
 
     def test_annotate_m2m(self):
         books = Book.objects.filter(rating__lt=4.5).annotate(Avg("authors__age")).order_by("name")

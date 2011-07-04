@@ -11,6 +11,14 @@ from models import Author, Publisher, Book, Store
 
 class BaseAggregateTestCase(TestCase):
     fixtures = ["initial_data.json"]
+    
+    def test_field_annotation(self):
+        """
+        I do not belong here!
+        """
+        books = Book.objects.all().field_annotate(id_plus_1=F('id') + 1).filter(id_plus_1=2)
+          
+        self.assertEqual(books[0].id_plus_1, 2)
 
     def test_empty_aggregate(self):
         self.assertEqual(Author.objects.all().aggregate(), {})
@@ -656,3 +664,4 @@ class BaseAggregateTestCase(TestCase):
                 (Decimal('82.8'), 1),
             ]
         )
+

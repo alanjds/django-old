@@ -135,6 +135,7 @@ class Query(object):
         self.aggregate_select_mask = None
         self._aggregate_select_cache = None
 
+        self.annotations = SortedDict() # Maps aliases -> expressions
         # Arbitrary maximum limit for select_related. Prevents infinite
         # recursion. Can be changed by the depth parameter to select_related().
         self.max_depth = 5
@@ -271,6 +272,8 @@ class Query(object):
         # It will get re-populated in the cloned queryset the next time it's
         # used.
         obj._aggregate_select_cache = None
+        # TODO: This will probably not work!
+        obj.annotations = self.annotations.copy()
         obj.max_depth = self.max_depth
         obj.extra = self.extra.copy()
         if self.extra_select_mask is None:
@@ -1022,6 +1025,10 @@ class Query(object):
             self.where = original_where
         # Add the aggregate to the query
         aggregate.add_to_query(self, alias, col=col, source=source, is_summary=is_summary)
+    
+    def add_annotation(self, annotation, alias):
+        col = SQLEvaluator(annotation, self)
+        self.annotations[alias] = col
 
     def add_filter(self, filter_expr, connector=AND, negate=False, trim=False,
             can_reuse=None, process_extras=True, force_having=False):
@@ -1085,6 +1092,11 @@ class Query(object):
                 if negate:
                     entry.negate()
                 self.having.add(entry, connector)
+                return
+        
+        for alias, annotation in self.annotations.items():
+            if alias in (parts[0], LOOKUP_SEP.join(parts)):
+                self.where.add((annotation, lookup_type, value), connector) 
                 return
 
         opts = self.get_meta()

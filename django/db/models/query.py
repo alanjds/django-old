@@ -225,6 +225,7 @@ class QuerySet(object):
 
         extra_select = self.query.extra_select.keys()
         aggregate_select = self.query.aggregate_select.keys()
+        annotation_select = self.query.annotations.keys()
 
         only_load = self.query.get_loaded_field_names()
         if not fill_cache:
@@ -233,6 +234,7 @@ class QuerySet(object):
 
         index_start = len(extra_select)
         aggregate_start = index_start + len(self.model._meta.fields)
+        annotation_start = aggregate_start + len(aggregate_select)
 
         load_fields = []
         # If only/defer clauses have been specified,
@@ -298,6 +300,10 @@ class QuerySet(object):
             if aggregate_select:
                 for i, aggregate in enumerate(aggregate_select):
                     setattr(obj, aggregate, row[i+aggregate_start])
+            
+            if annotation_select:
+                for i, annotation in enumerate(annotation_select):
+                    setattr(obj, annotation, row[i + annotation_start])
 
             yield obj
 
@@ -656,6 +662,34 @@ class QuerySet(object):
                 is_summary=False)
 
         return obj
+    
+    def field_annotate(self, **kwargs):
+        """
+        Return a query set in which the returned objects have been annotated
+        with the annotated fields.
+        
+        NOTE: it might be better to use the .annotate() method to annotate
+        both aggregates and fields. For simplicity I haven't done it like that
+        at the moment.
+ 
+        In field_annotate there must always be a name for the annotation.
+        """
+        
+        names = getattr(self, '_fields', None)
+        if names is None:
+            names = set(self.model._meta.get_all_field_names())
+        for annotation in kwargs:
+            if annotation in names:
+                raise ValueError("The annotation '%s' conflicts with a field on "
+                    "the model." % aggregate)
+
+        obj = self._clone()
+
+        # Add the aggregates to the query
+        for (alias, annotation_expr) in kwargs.items():
+            obj.query.add_annotation(annotation_expr, alias)
+
+        return obj
 
     def order_by(self, *field_names):
         """
@@ -847,8 +881,9 @@ class ValuesQuerySet(QuerySet):
         extra_names = self.query.extra_select.keys()
         field_names = self.field_names
         aggregate_names = self.query.aggregate_select.keys()
+        annotation_names = self.query.annotations.keys()
 
-        names = extra_names + field_names + aggregate_names
+        names = extra_names + field_names + aggregate_names + annotation_names
 
         for row in self.query.get_compiler(self.db).results_iter():
             yield dict(zip(names, row))

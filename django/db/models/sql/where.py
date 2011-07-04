@@ -6,6 +6,7 @@ from itertools import repeat
 
 from django.utils import tree
 from django.db.models.fields import Field
+from django.db.models.sql.expressions import SQLEvaluator
 from django.db.models.query_utils import QueryWrapper
 from datastructures import EmptyResultSet, FullResultSet
 
@@ -62,6 +63,10 @@ class WhereNode(tree.Node):
             annotation = value.value_annotation
         else:
             annotation = bool(value)
+        if isinstance(obj, SQLEvaluator):
+            super(WhereNode, self).add((obj, lookup_type, annotation, value),
+                connector)
+            return
 
         if hasattr(obj, "prepare"):
             value = obj.prepare(lookup_type, value)

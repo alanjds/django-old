@@ -213,6 +213,18 @@ class SQLCompiler(object):
                 )
             )
             query_params.extend(params)
+        
+        for alias, annotation in self.query.annotations.items():
+            sql, params = annotation.as_sql(qn, self.connection)
+            result.append(
+                '%s%s' % (
+                    sql,
+                    alias is not None
+                        and ' AS %s' % qn(truncate_name(alias, max_name_length))
+                        or ''
+                )
+            )
+            query_params.extend(params)
 
         for table, col in self.query.related_select_cols:
             r = '%s.%s' % (qn(table), qn(col))

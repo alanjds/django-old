@@ -60,6 +60,15 @@ class BaseAggregateTestCase(TestCase):
         self.assertEqual(len(vals), 1)
         self.assertAlmostEqual(vals["friends__age__avg"], 30.43, places=2)
 
+        # How much younger they are?
+        from django.conf import settings
+        settings.DEBUG=True
+        vals = Author.objects.aggregate(friends_younger_avg=Avg(F('age') - F("friends__age"), only=Q(friends__age__lt=F('age'))))
+        from django.db import connection
+        print connection.queries[-1]
+        self.assertEqual(len(vals), 1)
+        self.assertAlmostEqual(vals["friends_younger_avg"], 7.29, places=2)
+
         vals = Book.objects.filter(rating__lt=4.5).aggregate(Avg("authors__age"))
         self.assertEqual(len(vals), 1)
         self.assertAlmostEqual(vals["authors__age__avg"], 38.2857, places=2)

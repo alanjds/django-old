@@ -61,11 +61,7 @@ class BaseAggregateTestCase(TestCase):
         self.assertAlmostEqual(vals["friends__age__avg"], 30.43, places=2)
 
         # How much younger they are?
-        from django.conf import settings
-        settings.DEBUG=True
         vals = Author.objects.aggregate(friends_younger_avg=Avg(F('age') - F("friends__age"), only=Q(friends__age__lt=F('age'))))
-        from django.db import connection
-        print connection.queries[-1]
         self.assertEqual(len(vals), 1)
         self.assertAlmostEqual(vals["friends_younger_avg"], 7.29, places=2)
 

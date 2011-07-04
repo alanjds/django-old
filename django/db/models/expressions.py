@@ -39,8 +39,8 @@ class ExpressionNode(tree.Node):
     # VISITOR METHODS #
     ###################
 
-    def prepare(self, evaluator, query, allow_joins):
-        return evaluator.prepare_node(self, query, allow_joins)
+    def prepare(self, evaluator, query, allow_joins, promote_joins=False):
+        return evaluator.prepare_node(self, query, allow_joins, promote_joins)
 
     def evaluate(self, evaluator, qn, connection):
         return evaluator.evaluate_node(self, qn, connection)
@@ -107,8 +107,8 @@ class F(ExpressionNode):
         obj.name = self.name
         return obj
 
-    def prepare(self, evaluator, query, allow_joins):
-        return evaluator.prepare_leaf(self, query, allow_joins)
+    def prepare(self, evaluator, query, allow_joins, promote_joins=False):
+        return evaluator.prepare_leaf(self, query, allow_joins, promote_joins)
 
     def evaluate(self, evaluator, qn, connection):
         return evaluator.evaluate_leaf(self, qn, connection)

@@ -47,7 +47,8 @@ class SQLEvaluator(object):
                 field, source, opts, join_list, last, _ = query.setup_joins(
                     field_list, query.get_meta(),
                     query.get_initial_alias(), False)
-                col, _, join_list = query.trim_joins(source, join_list, last, False)
+                cols, _, join_list = query.trim_joins(source, join_list, last, False)
+                col = cols[0]
                 if promote_joins:
                     for column_alias in join_list:
                         query.promote_alias(column_alias, unconditional=True)

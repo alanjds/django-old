@@ -47,8 +47,8 @@ class SQLEvaluator(object):
                 field, source, opts, join_list, last, _ = query.setup_joins(
                     field_list, query.get_meta(),
                     query.get_initial_alias(), False)
-                col, _, join_list = query.trim_joins(source, join_list, last, False)
-
+                cols, _, join_list = query.trim_joins(source, join_list, last, False)
+                col = cols[0]
                 self.cols[node] = (join_list[-1], col)
             except FieldDoesNotExist:
                 raise FieldError("Cannot resolve keyword %r into field. "

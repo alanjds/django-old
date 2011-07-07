@@ -457,11 +457,11 @@ class Query(object):
                 # An unused alias.
                 continue
             promote = (rhs.alias_map[alias][JOIN_TYPE] == self.LOUTER)
-            lhs, table, lhs_col, col = rhs.rev_join_map[alias]
+            lhs, table, lhs_cols, cols = rhs.rev_join_map[alias]
             # If the left side of the join was already relabeled, use the
             # updated alias.
             lhs = change_map.get(lhs, lhs)
-            new_alias = self.join((lhs, table, lhs_col, col),
+            new_alias = self.join((lhs, table, lhs_cols, cols),
                     (conjunction and not first), used, promote, not conjunction)
             used.add(new_alias)
             change_map[alias] = new_alias
@@ -809,7 +809,7 @@ class Query(object):
             alias = self.tables[0]
             self.ref_alias(alias)
         else:
-            alias = self.join((None, self.model._meta.db_table, None, None))
+            alias = self.join((None, self.model._meta.db_table, (None,), (None,)))
         return alias
 
     def count_active_tables(self):
@@ -824,11 +824,12 @@ class Query(object):
         """
         Returns an alias for the join in 'connection', either reusing an
         existing alias for that join or creating a new one. 'connection' is a
-        tuple (lhs, table, lhs_col, col) where 'lhs' is either an existing
-        table alias or a table name. The join correspods to the SQL equivalent
+        tuple (lhs, table, (lhs_col1, lhs_col2, ...), (col1, col2, ...)) where 
+        'lhs' is either an existing table alias or a table name. The join 
+        corresponds to the SQL equivalent
         of::
 
-            lhs.lhs_col = table.col
+            lhs.lhs_col = table.col AND lhs.col2 = table.col2 AND ...
 
         If 'always_create' is True and 'reuse' is None, a new alias is always
         created, regardless of whether one already exists or not. If
@@ -852,7 +853,7 @@ class Query(object):
         If 'nullable' is True, the join can potentially involve NULL values and
         is a candidate for promotion (to "left outer") when combining querysets.
         """
-        lhs, table, lhs_col, col = connection
+        lhs, table, lhs_cols, cols = connection
         if lhs in self.alias_map:
             lhs_table = self.alias_map[lhs][TABLE_NAME]
         else:
@@ -863,7 +864,7 @@ class Query(object):
             # reusable set, minus exclusions, for this table".
             exclusions = set(self.table_map[table]).difference(reuse).union(set(exclusions))
             always_create = False
-        t_ident = (lhs_table, table, lhs_col, col)
+        t_ident = (lhs_table, table, lhs_cols, cols)
         if not always_create:
             for alias in self.join_map.get(t_ident, ()):
                 if alias not in exclusions:
@@ -888,7 +889,7 @@ class Query(object):
             join_type = self.LOUTER
         else:
             join_type = self.INNER
-        join = (table, alias, join_type, lhs, lhs_col, col, nullable)
+        join = (table, alias, join_type, lhs, lhs_cols, cols, nullable)
         self.alias_map[alias] = join
         if t_ident in self.join_map:
             self.join_map[t_ident] += (alias,)
@@ -923,7 +924,7 @@ class Query(object):
                 else:
                     link_field = opts.get_ancestor_link(model)
                     seen[model] = self.join((root_alias, model._meta.db_table,
-                            link_field.column, model._meta.pk.column))
+                            (link_field.column,), (model._meta.pk.column,)))
         self.included_inherited_models = seen
 
     def remove_inherited_models(self):
@@ -979,7 +980,8 @@ class Query(object):
                 field_list, opts, self.get_initial_alias(), False)
 
             # Process the join chain to see if it can be trimmed
-            col, _, join_list = self.trim_joins(source, join_list, last, False)
+            cols, _, join_list = self.trim_joins(source, join_list, last, False)
+            col = cols[0]
 
             # If the aggregate references a model or field that requires a join,
             # those joins must be LEFT OUTER - empty join rows must be returned
@@ -1085,7 +1087,7 @@ class Query(object):
 
         # Process the join list to see if we can remove any inner joins from
         # the far end (fewer tables in a query is better).
-        col, alias, join_list = self.trim_joins(target, join_list, last, trim)
+        cols, alias, join_list = self.trim_joins(target, join_list, last, trim)
 
         if connector == OR:
             # Some joins may need to be promoted when adding a new filter to a
@@ -1111,13 +1113,15 @@ class Query(object):
 
 
         if having_clause or force_having:
-            if (alias, col) not in self.group_by:
-                self.group_by.append((alias, col))
-            self.having.add((Constraint(alias, col, field), lookup_type, value),
-                connector)
+            for col in cols:
+                if (alias, col) not in self.group_by:
+                    self.group_by.append((alias, col))
+                self.having.add((Constraint(alias, col, field), lookup_type, value),
+                    connector)
         else:
-            self.where.add((Constraint(alias, col, field), lookup_type, value),
-                connector)
+            for col in cols:
+                self.where.add((Constraint(alias, col, field), lookup_type, value),
+                    connector)
 
         if negate:
             self.promote_alias_chain(join_list)
@@ -1125,12 +1129,13 @@ class Query(object):
                 if len(join_list) > 1:
                     for alias in join_list:
                         if self.alias_map[alias][JOIN_TYPE] == self.LOUTER:
-                            j_col = self.alias_map[alias][RHS_JOIN_COL]
+                            j_cols = self.alias_map[alias][RHS_JOIN_COLS]
                             entry = self.where_class()
-                            entry.add(
-                                (Constraint(alias, j_col, None), 'isnull', True),
-                                AND
-                            )
+                            for j_col in j_cols:
+                                entry.add(
+                                    (Constraint(alias, j_col, None), 'isnull', True),
+                                    AND
+                                )
                             entry.negate()
                             self.where.add(entry, AND)
                             break
@@ -1142,7 +1147,8 @@ class Query(object):
                     # exclude the "foo__in=[]" case from this handling, because
                     # it's short-circuited in the Where class.
                     # We also need to handle the case where a subquery is provided
-                    self.where.add((Constraint(alias, col, None), 'isnull', False), AND)
+                    for col in cols:
+                        self.where.add((Constraint(alias, col, None), 'isnull', False), AND)
 
         if can_reuse is not None:
             can_reuse.update(join_list)
@@ -1270,8 +1276,10 @@ class Query(object):
                                     (id(opts), lhs_col), ()))
                             dupe_set.add((opts, lhs_col))
                         opts = int_model._meta
-                        alias = self.join((alias, opts.db_table, lhs_col,
-                                opts.pk.column), exclusions=exclusions)
+                        alias = self.join(
+                            (alias, opts.db_table, (lhs_col,), (opts.pk.column,)),
+                            exclusions=exclusions
+                        )
                         joins.append(alias)
                         exclusions.add(alias)
                         for (dupe_opts, dupe_col) in dupe_set:
@@ -1310,7 +1318,7 @@ class Query(object):
                                 to_col1, table2, from_col2, to_col2, opts,
                                 target)
 
-                    int_alias = self.join((alias, table1, from_col1, to_col1),
+                    int_alias = self.join((alias, table1, (from_col1,), (to_col1,)),
                             dupe_multis, exclusions, nullable=True,
                             reuse=can_reuse)
                     if int_alias == table2 and from_col2 == to_col2:
@@ -1318,7 +1326,7 @@ class Query(object):
                         alias = int_alias
                     else:
                         alias = self.join(
-                                (int_alias, table2, from_col2, to_col2),
+                                (int_alias, table2, (from_col2,), (to_col2,)),
                                 dupe_multis, exclusions, nullable=True,
                                 reuse=can_reuse)
                         joins.extend([int_alias, alias])
@@ -1335,7 +1343,7 @@ class Query(object):
                         orig_opts._join_cache[name] = (table, from_col, to_col,
                                 opts, target)
 
-                    alias = self.join((alias, table, from_col, to_col),
+                    alias = self.join((alias, table, (from_col,), (to_col,)),
                             exclusions=exclusions, nullable=field.null)
                     joins.append(alias)
                 else:
@@ -1365,10 +1373,10 @@ class Query(object):
                                 to_col1, table2, from_col2, to_col2, opts,
                                 target)
 
-                    int_alias = self.join((alias, table1, from_col1, to_col1),
+                    int_alias = self.join((alias, table1, (from_col1,), (to_col1,)),
                             dupe_multis, exclusions, nullable=True,
                             reuse=can_reuse)
-                    alias = self.join((int_alias, table2, from_col2, to_col2),
+                    alias = self.join((int_alias, table2, (from_col2,), (to_col2,)),
                             dupe_multis, exclusions, nullable=True,
                             reuse=can_reuse)
                     joins.extend([int_alias, alias])
@@ -1393,7 +1401,7 @@ class Query(object):
                         orig_opts._join_cache[name] = (table, from_col, to_col,
                                 opts, target)
 
-                    alias = self.join((alias, table, from_col, to_col),
+                    alias = self.join((alias, table, (from_col,), (to_col,)),
                             dupe_multis, exclusions, nullable=True,
                             reuse=can_reuse)
                     joins.append(alias)
@@ -1446,19 +1454,19 @@ class Query(object):
             join_list = join_list[:penultimate]
             final = penultimate
             penultimate = last.pop()
-            col = self.alias_map[extra[0]][LHS_JOIN_COL]
+            col = self.alias_map[extra[0]][LHS_JOIN_COLS]
             for alias in extra:
                 self.unref_alias(alias)
         else:
-            col = target.column
+            col = (target.column,)
         alias = join_list[-1]
         while final > 1:
             join = self.alias_map[alias]
-            if col != join[RHS_JOIN_COL] or join[JOIN_TYPE] != self.INNER:
+            if col != join[RHS_JOIN_COLS] or join[JOIN_TYPE] != self.INNER:
                 break
             self.unref_alias(alias)
             alias = join[LHS_ALIAS]
-            col = join[LHS_JOIN_COL]
+            col = join[LHS_JOIN_COLS]
             join_list = join_list[:-1]
             final -= 1
             if final == penultimate:
@@ -1571,16 +1579,17 @@ class Query(object):
                         name.split(LOOKUP_SEP), opts, alias, False, allow_m2m,
                         True)
                 final_alias = joins[-1]
-                col = target.column
+                cols = (target.column,)
                 if len(joins) > 1:
                     join = self.alias_map[final_alias]
-                    if col == join[RHS_JOIN_COL]:
+                    if cols == join[RHS_JOIN_COLS]:
                         self.unref_alias(final_alias)
                         final_alias = join[LHS_ALIAS]
-                        col = join[LHS_JOIN_COL]
+                        cols = join[LHS_JOIN_COLS]
                         joins = joins[:-1]
                 self.promote_alias_chain(joins[1:])
-                self.select.append((final_alias, col))
+                for col in cols:
+                    self.select.append((final_alias, col))
                 self.select_fields.append(field)
         except MultiJoin:
             raise FieldError("Invalid field name: '%s'" % name)
@@ -1650,7 +1659,7 @@ class Query(object):
         else:
             opts = self.model._meta
             if not self.select:
-                count = self.aggregates_module.Count((self.join((None, opts.db_table, None, None)), opts.pk.column),
+                count = self.aggregates_module.Count((self.join((None, opts.db_table, (None,), (None,))), opts.pk.column),
                                          is_summary=True, distinct=True)
             else:
                 # Because of SQL portability issues, multi-column, distinct
@@ -1846,7 +1855,7 @@ class Query(object):
         alias = self.get_initial_alias()
         field, col, opts, joins, last, extra = self.setup_joins(
                 start.split(LOOKUP_SEP), opts, alias, False)
-        select_col = self.alias_map[joins[1]][LHS_JOIN_COL]
+        select_cols = self.alias_map[joins[1]][LHS_JOIN_COLS]
         select_alias = alias
 
         # The call to setup_joins added an extra reference to everything in
@@ -1859,13 +1868,15 @@ class Query(object):
         # is *always* the same value as lhs).
         for alias in joins[1:]:
             join_info = self.alias_map[alias]
-            if (join_info[LHS_JOIN_COL] != select_col
+            if (join_info[LHS_JOIN_COLS] != select_cols
                     or join_info[JOIN_TYPE] != self.INNER):
                 break
             self.unref_alias(select_alias)
             select_alias = join_info[RHS_ALIAS]
-            select_col = join_info[RHS_JOIN_COL]
-        self.select = [(select_alias, select_col)]
+            select_cols = join_info[RHS_JOIN_COLS]
+        self.select = []
+        for select_col in select_cols:
+            self.select.append((select_alias, select_col))
         self.remove_inherited_models()
 
 

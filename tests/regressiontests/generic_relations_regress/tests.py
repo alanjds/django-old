@@ -1,6 +1,7 @@
 from django.test import TestCase
 from django.contrib.contenttypes.models import ContentType
 from django.db.models import Q
+from django.db.models import Count
 from models import *
 
 class GenericRelationTests(TestCase):
@@ -59,6 +60,7 @@ class GenericRelationTests(TestCase):
         org_contact = Contact.objects.create()
         note = Note.objects.create(note='note', content_object=note_contact)
         org = Organization.objects.create(name='org name')
+        note2 = Note.objects.create(note='note2', content_object=org)
         org.contacts.add(org_contact)
         # search with a non-matching note and a matching org name
         qs = Contact.objects.filter(Q(notes__note__icontains=r'other note') |
@@ -69,6 +71,7 @@ class GenericRelationTests(TestCase):
             Q(organizations__name__icontains=r'org name') |
             Q(notes__note__icontains=r'other note'))
         self.assertTrue(org_contact in qs)
-
-
-
+        qs = Contact.objects.filter(notes__note__isnull=True)
+        self.assertEquals(qs.count(), 1)
+        qs = Contact.objects.annotate(Count('notes')).order_by('pk')
+        self.assertEquals([(note.pk, 1), (note2.pk, 0)], [(c.pk,c.notes__count) for c in qs])

@@ -103,6 +103,7 @@ class Query(object):
         self.table_map = {}     # Maps table names to list of aliases.
         self.join_map = {}
         self.rev_join_map = {}  # Reverse of join_map.
+        self.extra_join_filters = {} # alias -> constraint to add to join
         self.quote_cache = {}
         self.default_cols = True
         self.default_ordering = True
@@ -235,6 +236,7 @@ class Query(object):
         obj.table_map = self.table_map.copy()
         obj.join_map = self.join_map.copy()
         obj.rev_join_map = self.rev_join_map.copy()
+        obj.extra_join_filters = self.extra_join_filters.copy()
         obj.quote_cache = {}
         obj.default_cols = self.default_cols
         obj.default_ordering = self.default_ordering
@@ -719,7 +721,7 @@ class Query(object):
         assert set(change_map.keys()).intersection(set(change_map.values())) == set()
 
         # 1. Update references in "select" (normal columns plus aliases),
-        # "group by", "where" and "having".
+        # "group by", "where", "having" and extra_join_filters' conditions.
         self.where.relabel_aliases(change_map)
         self.having.relabel_aliases(change_map)
         for columns in [self.select, self.group_by or []]:
@@ -737,6 +739,8 @@ class Query(object):
                 else:
                     col.relabel_aliases(change_map)
 
+        for cond in self.extra_join_filters.values():
+            cond.relabel_aliases(change_map)
         # 2. Rename the alias in the internal table/alias datastructures.
         for old_alias, new_alias in change_map.iteritems():
             alias_data = list(self.alias_map[old_alias])
@@ -754,6 +758,9 @@ class Query(object):
             del self.alias_map[old_alias]
 
             table_aliases = self.table_map[alias_data[TABLE_NAME]]
+
+            if old_alias in self.extra_join_filters:
+                self.extra_join_filters[new_alias] = self.extra_join_filters[old_alias]
             for pos, alias in enumerate(table_aliases):
                 if alias == old_alias:
                     table_aliases[pos] = new_alias
@@ -975,8 +982,8 @@ class Query(object):
             #   - this is an annotation over a model field
             # then we need to explore the joins that are required.
 
-            field, source, opts, join_list, last, _ = self.setup_joins(
-                field_list, opts, self.get_initial_alias(), False)
+            field, source, opts, join_list, last = self.setup_joins(
+                field_list, opts, self.get_initial_alias(), False, process_extras=True)
 
             # Process the join chain to see if it can be trimmed
             col, _, join_list = self.trim_joins(source, join_list, last, False)
@@ -998,32 +1005,7 @@ class Query(object):
         # Add the aggregate to the query
         aggregate.add_to_query(self, alias, col=col, source=source, is_summary=is_summary)
 
-    def add_filter(self, filter_expr, connector=AND, negate=False, trim=False,
-            can_reuse=None, process_extras=True, force_having=False):
-        """
-        Add a single filter to the query. The 'filter_expr' is a pair:
-        (filter_string, value). E.g. ('name__contains', 'fred')
-
-        If 'negate' is True, this is an exclude() filter. It's important to
-        note that this method does not negate anything in the where-clause
-        object when inserting the filter constraints. This is because negated
-        filters often require multiple calls to add_filter() and the negation
-        should only happen once. So the caller is responsible for this (the
-        caller will normally be add_q(), so that as an example).
-
-        If 'trim' is True, we automatically trim the final join group (used
-        internally when constructing nested queries).
-
-        If 'can_reuse' is a set, we are processing a component of a
-        multi-component filter (e.g. filter(Q1, Q2)). In this case, 'can_reuse'
-        will be a set of table aliases that can be reused in this filter, even
-        if we would otherwise force the creation of new aliases for a join
-        (needed for nested Q-filters). The set is updated by this method.
-
-        If 'process_extras' is set, any extra filters returned from the table
-        joining process will be processed. This parameter is set to False
-        during the processing of extra filters to avoid infinite recursion.
-        """
+    def process_filter_expr(self, filter_expr):
         arg, value = filter_expr
         parts = arg.split(LOOKUP_SEP)
         if not parts:
@@ -1052,6 +1034,42 @@ class Query(object):
             # If value is a query expression, evaluate it
             value = SQLEvaluator(value, self)
             having_clause = value.contains_aggregate
+        return parts, lookup_type, having_clause, value
+
+    def add_filter(self, filter_expr, connector=AND, negate=False, trim=False,
+            can_reuse=None, force_having=False):
+        """
+        Add a single filter to the query. The 'filter_expr' is a pair:
+        (filter_string, value). E.g. ('name__contains', 'fred')
+
+        If 'negate' is True, this is an exclude() filter. It's important to
+        note that this method does not negate anything in the where-clause
+        object when inserting the filter constraints. This is because negated
+        filters often require multiple calls to add_filter() and the negation
+        should only happen once. So the caller is responsible for this (the
+        caller will normally be add_q(), so that as an example).
+
+        If 'trim' is True, we automatically trim the final join group (used
+        internally when constructing nested queries).
+
+        If 'can_reuse' is a set, we are processing a component of a
+        multi-component filter (e.g. filter(Q1, Q2)). In this case, 'can_reuse'
+        will be a set of table aliases that can be reused in this filter, even
+        if we would otherwise force the creation of new aliases for a join
+        (needed for nested Q-filters). The set is updated by this method.
+        """
+        arg, value = filter_expr
+        parts = arg.split(LOOKUP_SEP)
+        if not parts:
+            raise FieldError("Cannot parse keyword query %r" % arg)
+
+        # Work out the lookup type and remove it from 'parts', if necessary.
+        if len(parts) == 1 or parts[-1] not in self.query_terms:
+            lookup_type = 'exact'
+        else:
+            lookup_type = parts.pop()
+
+        parts, lookup_type, having_clause, value = self.process_filter_expr(filter_expr)
 
         for alias, aggregate in self.aggregates.items():
             if alias in (parts[0], LOOKUP_SEP.join(parts)):
@@ -1065,12 +1083,10 @@ class Query(object):
         opts = self.get_meta()
         alias = self.get_initial_alias()
         allow_many = trim or not negate
-
         try:
-            field, target, opts, join_list, last, extra_filters = self.setup_joins(
+            field, target, opts, join_list, last = self.setup_joins(
                     parts, opts, alias, True, allow_many, allow_explicit_fk=True,
-                    can_reuse=can_reuse, negate=negate,
-                    process_extras=process_extras)
+                    can_reuse=can_reuse, negate=negate)
         except MultiJoin, e:
             self.split_exclude(filter_expr, LOOKUP_SEP.join(parts[:e.level]),
                     can_reuse)
@@ -1146,10 +1162,6 @@ class Query(object):
 
         if can_reuse is not None:
             can_reuse.update(join_list)
-        if process_extras:
-            for filter in extra_filters:
-                self.add_filter(filter, negate=negate, can_reuse=can_reuse,
-                        process_extras=False)
 
     def add_q(self, q_object, used_aliases=None, force_having=False):
         """
@@ -1289,6 +1301,7 @@ class Query(object):
 
             if process_extras and hasattr(field, 'extra_filters'):
                 extra_filters.extend(field.extra_filters(names, pos, negate))
+
             if direct:
                 if m2m:
                     # Many-to-many field defined on the current model.
@@ -1410,8 +1423,31 @@ class Query(object):
                 raise FieldError("Join on field %r not permitted. Did you misspell %r for the lookup type?" % (name, names[pos + 1]))
             else:
                 raise FieldError("Join on field %r not permitted." % name)
+        
+        for filter_expr in extra_filters:
+             parts, lookup_type, having_clause, value = self.process_filter_expr(filter_expr)
+             assert len(parts) == 2 and lookup_type == 'exact'
+             
+             # The following three operations could use some DRY. They repeat the 
+             # same pattern than in add_filter. The only difference is that here 
+             # we do not catch MultiJoin. The main issue is what would be a
+             # good name.
+             e_field, e_col, e_opts, e_joins, e_last = self.setup_joins(
+                     parts, self.get_meta(), self.get_initial_alias(), dupe_multis, 
+                     process_extras=False, negate=negate,can_reuse=joins)
+             
+             if (lookup_type == 'isnull' and value is True and not negate and
+                   len(join_list) > 1):
+                 self.promote_alias_chain(join_list)
+             e_col, e_alias, e_joins = self.trim_joins(e_col, e_joins, e_last, True)
+             assert set(joins).issuperset(set(e_joins))
+             constraint = (Constraint(e_alias, e_col, e_field), lookup_type, value)
+             where = self.where_class()
+             where.add(constraint, AND)
+             self.extra_join_filters[alias] = where
+         
 
-        return field, target, opts, joins, last, extra_filters
+        return field, target, opts, joins, last
 
     def trim_joins(self, target, join_list, last, trim):
         """
@@ -1567,7 +1603,7 @@ class Query(object):
 
         try:
             for name in field_names:
-                field, target, u2, joins, u3, u4 = self.setup_joins(
+                field, target, _, joins, _ = self.setup_joins(
                         name.split(LOOKUP_SEP), opts, alias, False, allow_m2m,
                         True)
                 final_alias = joins[-1]
@@ -1844,7 +1880,7 @@ class Query(object):
         """
         opts = self.model._meta
         alias = self.get_initial_alias()
-        field, col, opts, joins, last, extra = self.setup_joins(
+        field, col, opts, joins, last = self.setup_joins(
                 start.split(LOOKUP_SEP), opts, alias, False)
         select_col = self.alias_map[joins[1]][LHS_JOIN_COL]
         select_alias = alias

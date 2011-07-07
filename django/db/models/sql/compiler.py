@@ -384,7 +384,7 @@ class SQLCompiler(object):
         pieces = name.split(LOOKUP_SEP)
         if not alias:
             alias = self.query.get_initial_alias()
-        field, target, opts, joins, last, extra = self.query.setup_joins(pieces,
+        field, target, opts, joins, last = self.query.setup_joins(pieces,
                 opts, alias, False)
         alias = joins[-1]
         col = target.column
@@ -443,6 +443,7 @@ class SQLCompiler(object):
         qn = self.quote_name_unless_alias
         qn2 = self.connection.ops.quote_name
         first = True
+        f_params = []
         for alias in self.query.tables:
             if not self.query.alias_refcount[alias]:
                 continue
@@ -454,9 +455,15 @@ class SQLCompiler(object):
                 continue
             alias_str = (alias != name and ' %s' % alias or '')
             if join_type and not first:
-                result.append('%s %s%s ON (%s.%s = %s.%s)'
+                extra_condition = ""
+                if alias in self.query.extra_join_filters:
+                    extra_condition, params = self.query.extra_join_filters[alias].as_sql(qn, self.connection)
+                    f_params.extend(params)
+                    extra_condition = " AND " + extra_condition
+                
+                result.append('%s %s%s ON (%s.%s = %s.%s%s)'
                         % (join_type, qn(name), alias_str, qn(lhs),
-                           qn2(lhs_col), qn(alias), qn2(col)))
+                           qn2(lhs_col), qn(alias), qn2(col), extra_condition))
             else:
                 connector = not first and ', ' or ''
                 result.append('%s%s%s' % (connector, qn(name), alias_str))
@@ -470,7 +477,7 @@ class SQLCompiler(object):
                 connector = not first and ', ' or ''
                 result.append('%s%s' % (connector, qn(alias)))
                 first = False
-        return result, []
+        return result, f_params
 
     def get_grouping(self):
         """

@@ -95,3 +95,23 @@ class SQLEvaluator(object):
             return sql, params
 
         return connection.ops.date_interval_sql(sql, node.connector, timedelta), params
+
+
+class QueryTreeSQLEvaluator(SQLEvaluator):
+
+    def prepare_leaf(self, node, query, allow_joins):
+        if not allow_joins and LOOKUP_SEP in node.name:
+            raise FieldError("Joined field references are not permitted in this query")
+
+        field_list = node.name.split(LOOKUP_SEP)
+        if (len(field_list) == 1 and
+            node.name in query.aggregate_select.keys()):
+            self.contains_aggregate = True
+            self.cols[node] = query.aggregate_select[node.name]
+        else:
+            join_path, final_field = query.filter_chain_to_join_path(field_list)
+            join_path_with_m2m = query.append_m2m_points(join_path)
+            # HMM - I have a feelig the op_num below isn't correct..
+            filter_info = (query.op_num, None)
+            final_ident = query.add_join_path(join_path_with_m2m, filter_info) 
+            self.cols[node] = (final_ident, final_field.column)

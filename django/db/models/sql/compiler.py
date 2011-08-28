@@ -9,6 +9,12 @@ from django.db.models.sql.query import (get_proxied_model, get_order_dir,
      select_related_descend, Query)
 from django.db.utils import DatabaseError
 
+# import the QueryTreeSQLCompiler into the namespace so that
+# the implementation can be in another file, but still allow
+# backend compiler() to work.
+
+from django.db.models.sql.qtcompiler import QueryTreeSQLCompiler
+
 class SQLCompiler(object):
     def __init__(self, query, connection, using):
         self.query = query

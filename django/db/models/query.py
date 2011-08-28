@@ -295,6 +295,91 @@ class QuerySet(object):
                     setattr(obj, aggregate, row[i+aggregate_start])
 
             yield obj
+    
+    def iterator2(self):
+        """
+        An iterator over the results from applying this QuerySet to the
+        database.
+        """
+        fill_cache = self.query2.select_related
+        if isinstance(fill_cache, dict):
+            requested = fill_cache
+        else:
+            requested = None
+        max_depth = self.query2.max_depth
+
+        extra_select = self.query2.extra_select.keys()
+        aggregate_select = self.query2.aggregate_select.keys()
+
+        only_load = self.query2.get_loaded_field_names()
+        if not fill_cache:
+            fields = self.model._meta.fields
+
+        load_fields = []
+        # If only/defer clauses have been specified,
+        # build the list of fields that are to be loaded.
+        if only_load:
+            for field, model in self.model._meta.get_fields_with_model():
+                if model is None:
+                    model = self.model
+                try:
+                    if field.name in only_load[model]:
+                        # Add a field that has been explicitly included
+                        load_fields.append(field.name)
+                except KeyError:
+                    # Model wasn't explicitly listed in the only_load table
+                    # Therefore, we need to load all fields from this model
+                    load_fields.append(field.name)
+
+        index_start = len(extra_select)
+        aggregate_start = index_start + len(load_fields or self.model._meta.fields)
+
+        skip = None
+        if load_fields and not fill_cache:
+            # Some fields have been deferred, so we have to initialise
+            # via keyword arguments.
+            skip = set()
+            init_list = []
+            for field in fields:
+                if field.name not in load_fields:
+                    skip.add(field.attname)
+                else:
+                    init_list.append(field.attname)
+            model_cls = deferred_class_factory(self.model, skip)
+
+        # Cache db and model outside the loop
+        db = self.db
+        model = self.model
+        compiler = self.query2.get_compiler(using=db)
+        for row in compiler.results_iter():
+            if fill_cache:
+                obj, _ = get_cached_row(model, row,
+                            index_start, using=db, max_depth=max_depth,
+                            requested=requested, offset=len(aggregate_select),
+                            only_load=only_load)
+            else:
+                if skip:
+                    row_data = row[index_start:aggregate_start]
+                    obj = model_cls(**dict(zip(init_list, row_data)))
+                else:
+                    # Omit aggregates in object creation.
+                    obj = model(*row[index_start:aggregate_start])
+
+                # Store the source database of the object
+                obj._state.db = db
+                # This object came from the database; it's not being added.
+                obj._state.adding = False
+
+            if extra_select:
+                for i, k in enumerate(extra_select):
+                    setattr(obj, k, row[i])
+
+            # Add the aggregates to the model
+            if aggregate_select:
+                for i, aggregate in enumerate(aggregate_select):
+                    setattr(obj, aggregate, row[i+aggregate_start])
+
+            yield obj
 
     def aggregate(self, *args, **kwargs):
         """

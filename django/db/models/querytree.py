@@ -1,5 +1,6 @@
 import copy
 from django.core.exceptions import FieldError
+from django.db import connections, DEFAULT_DB_ALIAS
 from django.db.models.fields import FieldDoesNotExist
 from django.db.models.sql import AND, OR
 from django.db.models.sql.constants import LOOKUP_SEP, QUERY_TERMS
@@ -154,6 +155,7 @@ class Join(object):
  
 
 class QueryTree(object):
+    compiler = 'QueryTreeSQLCompiler'
     query_terms = QUERY_TERMS
     # Note: all instance state setup is done either in
     # prepare_new, or in clone()
@@ -164,11 +166,18 @@ class QueryTree(object):
         self.model = model
         self.start_new_op()
         self.base_rel = Relation(model, self.op_num)
-        self.selects = dict([(self.base_rel.rel_ident, f) for f in model._meta.fields])
+        self.selects = [(self.base_rel.rel_ident, f) for f in model._meta.fields]
         self.where = WhereNode()
         self.having = WhereNode()
         self.aggregates = {}
         self.aggregate_select = {}
+        self.select_related = []
+        self.max_depth = 5
+        self.extra_select = {}
+        self.select_for_update = False
+        self.low_mark = 0
+        self.high_mark = None
+        self.distinct = False
     
     def get_meta(self):
         return self.model._meta
@@ -177,14 +186,23 @@ class QueryTree(object):
         c = self.__class__()
         c.model = self.model
         c.base_rel = self.base_rel.clone()
-        c.selects = self.selects.copy()
+        c.selects = self.selects[:]
         # Almost all of time in cloning is used in here
         c.where = copy.deepcopy(self.where)
         c.having = copy.deepcopy(self.having)
         c.start_new_op()
         c.aggregates = self.aggregates.copy()
         c.aggregate_select = self.aggregate_select.copy()
+        c.select_related = self.select_related[:]
+        c.max_depth = self.max_depth
+        c.extra_select = self.extra_select.copy()
+        c.select_for_update = self.select_for_update
+        c.low_mark, c.high_mark = self.low_mark, self.high_mark
+        c.distinct = self.distinct
         return c
+
+    def get_loaded_field_names(self):
+        return []
 
     def get_field_by_name(self, opts, filter_name, allow_explicit_fk=True):
         """
@@ -406,7 +424,7 @@ class QueryTree(object):
 
     def as_sqlish(self, ident=0, prefix='T'):
         assert ord(prefix) <= ord('Z')
-        self.prepare_for_execution(prefix)
+        self.prepare_for_execution(prefix=prefix)
         buf = []
         buf.append(" " * ident + "SELECT ... ")
         buf.append("  FROM " + self.base_rel.from_clause_sqlish())
@@ -437,15 +455,17 @@ class QueryTree(object):
     def final_prune(self):
         return
 
-    def prepare_for_execution(self, prefix):
+    def prepare_for_execution(self, prefix='T'):
         # does various tasks related to preparing the query
         # for execution. Many of these things are SQL specific
         self.final_prune()
         self.subqueries = []
         self.extract_subqueries(self.base_rel)
         change_map = self.base_rel.rel_idents_to_aliases(prefix)
+        self.aliases = set(change_map.items())
         self.where.relabel_aliases(change_map)
         self.having.relabel_aliases(change_map)
+        self.select_cols = [(change_map[col[0]], col[1].column) for col in self.selects]
     
     def extract_subqueries(self, rel):
         for child in rel.child_joins:
@@ -471,3 +491,45 @@ class QueryTree(object):
                     extract_from.children.remove(child)
                     super(WhereNode, extract_to).add(child, connector)
         extract_to.end_subtree()
+
+    def __iter__(self):
+        # Always execute a new query for a new iterator.
+        # This could be optimized with a cache at the expense of RAM.
+        self._execute_query()
+        if not connections[self.using].features.can_use_chunked_reads:
+            # If the database can't use chunked reads we need to make sure we
+            # evaluate the entire query up front.
+            result = list(self.cursor)
+        else:
+            result = self.cursor
+        return iter(result)
+
+    def clear_ordering(self):
+        return
+
+    def set_limits(self, low=0, high=None):
+        return
+
+    def get_compiler(self, using=None, connection=None):
+        if using is None and connection is None:
+            raise ValueError("Need either using or connection")
+        if using:
+            connection = connections[using]
+
+        # Check that the compiler will be able to execute the query
+        for alias, aggregate in self.aggregate_select.items():
+            connection.ops.check_aggregate_support(aggregate)
+        self.prepare_for_execution()
+        return connection.ops.compiler(self.compiler)(self, connection, using)
+
+    def has_results(self, using):
+        c = self.clone()
+        c.select = {}
+        c.extra_select = ['1']
+        c.clear_ordering(True)
+        c.set_limits(high=1)
+        compiler = q.get_compiler(using=using)
+        return bool(compiler.execute_sql(SINGLE))
+
+    def get_columns(self):
+        return None

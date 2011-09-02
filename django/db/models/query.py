@@ -30,9 +30,9 @@ class QuerySet(object):
         self.model = model
         # EmptyQuerySet instantiates QuerySet with model as None
         self._db = using
-        self.query = query or sql.Query(self.model)
-        self.query2 = QueryTree() 
-        self.query2.prepare_new(model)
+        # self.query = query or sql.Query(self.model)
+        self.query = QueryTree() 
+        self.query.prepare_new(model)
         self._result_cache = None
         self._iter = None
         self._sticky_filter = False
@@ -301,17 +301,17 @@ class QuerySet(object):
         An iterator over the results from applying this QuerySet to the
         database.
         """
-        fill_cache = self.query2.select_related
+        fill_cache = self.query.select_related
         if isinstance(fill_cache, dict):
             requested = fill_cache
         else:
             requested = None
-        max_depth = self.query2.max_depth
+        max_depth = self.query.max_depth
 
-        extra_select = self.query2.extra_select.keys()
-        aggregate_select = self.query2.aggregate_select.keys()
+        extra_select = self.query.extra_select.keys()
+        aggregate_select = self.query.aggregate_select.keys()
 
-        only_load = self.query2.get_loaded_field_names()
+        only_load = self.query.get_loaded_field_names()
         if not fill_cache:
             fields = self.model._meta.fields
 
@@ -350,7 +350,7 @@ class QuerySet(object):
         # Cache db and model outside the loop
         db = self.db
         model = self.model
-        compiler = self.query2.get_compiler(using=db)
+        compiler = self.query.get_compiler(using=db)
         for row in compiler.results_iter():
             if fill_cache:
                 obj, _ = get_cached_row(model, row,
@@ -643,11 +643,11 @@ class QuerySet(object):
 
         clone = self._clone()
         if negate:
+            #clone.query.add_q(~Q(*args, **kwargs))
             clone.query.add_q(~Q(*args, **kwargs))
-            clone.query2.add_q(~Q(*args, **kwargs))
         else:
             clone.query.add_q(Q(*args, **kwargs))
-            clone.query2.add_q(Q(*args, **kwargs))
+            #clone.query2.add_q(Q(*args, **kwargs))
         return clone
 
     def complex_filter(self, filter_obj):
@@ -846,11 +846,11 @@ class QuerySet(object):
         if klass is None:
             klass = self.__class__
         query = self.query.clone()
-        query2 = self.query2.clone()
+        #query2 = self.query2.clone()
         if self._sticky_filter:
             query.filter_is_sticky = True
         c = klass(model=self.model, query=query, using=self._db)
-        c.query2 = query2
+        # c.query2 = query2
         c._for_write = self._for_write
         c.__dict__.update(kwargs)
         if setup and hasattr(c, '_setup_query'):

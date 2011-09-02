@@ -1,12 +1,14 @@
 import copy
+
 from django.core.exceptions import FieldError
 from django.db import connections, DEFAULT_DB_ALIAS
 from django.db.models.fields import FieldDoesNotExist
 from django.db.models.sql import AND, OR
-from django.db.models.sql.constants import LOOKUP_SEP, QUERY_TERMS
+from django.db.models.sql.constants import *
 from django.db.models.sql.expressions import QueryTreeSQLEvaluator as SQLEvaluator
 from django.db.models.sql.where import WhereNode, Constraint 
 from django.utils.tree import Node
+from django.utils.datastructures import SortedDict
 
 FOLLOW_REVERSE = 'FOLLOW_REVERSE'
 FOLLOW_FORWARD = 'FOLLOW_FORWARD'
@@ -25,16 +27,6 @@ def op_sequence_generator():
         yield i
 op_sequence_generator = op_sequence_generator()
 
-# A quick note - if Relation and Join cloning is too expensive,
-# we can easily do one of the following:
-#  - remove clonable variables from Relation and Join, that
-#    is, keep the query structure in QueryTree directly.
-#  - implement "inplace" querysets
-#  - implement lazy cloning (should not be as hard as it first
-#    feels like)
-# It is very likely that the Relation cloning isn't a bottleneck
-# wherenode cloning is more expensive.
-
 class Relation(object):
     def __init__(self, model, op_num, rel_ident=None):
         self.model = model
@@ -42,17 +34,10 @@ class Relation(object):
         self.rel_ident = rel_ident or op_sequence_generator.next()
         self.child_joins = []
 
-    def debug_print(self, ident=0):
-        child_pretty = ''.join([child.debug_print(ident+2) + '\n' for child in self.child_joins])
-        return " " * ident + "model: %s rel_ident: %s, alias: %s, joins:\n%s" % (self.model, self.rel_ident, getattr(self, 'alias', '-----'), child_pretty)
-    
     def clone(self):
         c = self.__class__(self.model, self.op_num, self.rel_ident)
         c.child_joins = [child.clone(c) for child in self.child_joins]
         return c
-
-    def from_clause_sqlish(self):
-        return self.model._meta.db_table + ' AS ' + self.alias
 
     def rel_idents_to_aliases(self, prefix):
         change_map = self.generate_change_map(prefix)
@@ -75,16 +60,15 @@ class Relation(object):
         for child in self.child_joins:
             child.to_rel.set_aliases(change_map)
 
-    def add_join(self, join_part, filter_info, parent_negated):
+    def add_join(self, join_part, op_num, parent_negated):
         if join_part[1] == FOLLOW_FORWARD:
             to_model = join_part[0].rel.to
         else:
             to_model = join_part[0].model
-        to_rel = Relation(to_model, filter_info[0])
+        to_rel = Relation(to_model, op_num)
         
-        join = Join(self, to_rel, [join_part[0:2]], filter_info[0])
-        join.negated = filter_info[3] or parent_negated
-        join.has_or = filter_info[2] == OR
+        join = Join(self, to_rel, [join_part[0:2]], op_num)
+        join.negated = parent_negated
         join.multirow = join_part[2]
         self.child_joins.append(join)
         return to_rel
@@ -97,46 +81,42 @@ class Join(object):
         self.op_num = op_num
         self.extra_cond = extra_cond
         self.multirow = False
+        # REFACTOR: these should be calculated in pre_sql_setup
+        # REFACTOR: are these even interesting?
+        # The answer might be: no, except for nullable
         self.has_or = False
         self.negated = False
         self.nullable = False
 
+    def _join_cols(self):
+        """
+        REFACTOR: use from_field, to_field format in join_fields
+        from the beginning...
+        """
+        cols = []
+        for field, direction in self.join_fields:
+            if direction == FOLLOW_FORWARD:
+                from_field = field.column
+                to_field = field.rel.get_related_field()
+            else:
+                from_field = field.rel.get_related_field()
+                to_field = field
+            cols.append((from_field, to_field))
+        return cols
+    join_cols = property(_join_cols)
+
     def clone(self, from_rel):
         to_rel = self.to_rel.clone()
-        c = self.__class__(from_rel, to_rel, self.join_fields, self.op_num, self.extra_cond)
+        c = self.__class__(
+            from_rel, to_rel, self.join_fields,
+            self.op_num, self.extra_cond)
         c.multirow = self.multirow
         c.has_or = self.has_or
         c.negated = self.negated
         c.nullable = self.nullable
         return c
 
-    def debug_print(self, ident=0):
-        return (" " * ident + "join conds, hasor: %s, negated: %s, nullable: %s, multirow: %s\n" + \
-               " " * ident + "to rel: " + self.to_rel.debug_print(ident + 2) + '\n') % \
-               (self.has_or, self.negated, self.nullable, self.multirow)
-
-    def join_clause_sqlish(self):
-        if self.nullable:
-            join_type = 'LEFT JOIN '
-        else:
-            join_type = 'JOIN '
-        ret = "" + join_type + self.to_rel.from_clause_sqlish() + " ON " 
-        for field, direction in self.join_fields:
-            if direction == FOLLOW_FORWARD:
-                from_col = field.column
-                to_col = field.rel.get_related_field().column 
-            else:
-                from_col = field.rel.get_related_field().column
-                to_col = field.column
-            ret += "%s.%s = %s.%s" % (
-                self.from_rel.alias, from_col,
-                self.to_rel.alias, to_col
-            )
-        for join in self.to_rel.child_joins:
-            ret += "\n  " + join.join_clause_sqlish()
-        return ret
-
-    def can_reuse(self, join_part, filter_info):
+    def can_reuse(self, join_part, op_num):
         # the first condition is that this is a join to
         # the same model and the same field
         join_cond = join_part[0:2]
@@ -144,29 +124,35 @@ class Join(object):
             return False
         if not self.multirow:
             return True
-        # multirow and different operation - the filter can target
-        # different row.
-        if self.op_num != filter_info[0]:
+        # multirow and different operation - the filter might target
+        # a different row.
+        if self.op_num != op_num:
             return False
         return True
 
-    def update_info(self, connection_info):
-        self.has_or = self.has_or or connection_info[2] == OR
+    def reverse_negates(self):
+        self.negated = not self.negated
+        for join in self.to_rel.child_joins:
+            join.reverse_negates() 
  
 
 class QueryTree(object):
     compiler = 'QueryTreeSQLCompiler'
-    query_terms = QUERY_TERMS
+    query_terms = QUERY_TERMS.copy()
+    query_terms.update({'exists': None})
     # Note: all instance state setup is done either in
     # prepare_new, or in clone()
     def start_new_op(self):
         self.op_num = op_sequence_generator.next()
+        self.op_stack = []
+        self.reverse_polish = []
 
     def prepare_new(self, model):
         self.model = model
         self.start_new_op()
         self.base_rel = Relation(model, self.op_num)
         self.selects = [(self.base_rel.rel_ident, f) for f in model._meta.fields]
+        self.filter_ops = {}
         self.where = WhereNode()
         self.having = WhereNode()
         self.aggregates = {}
@@ -177,12 +163,22 @@ class QueryTree(object):
         self.select_for_update = False
         self.low_mark = 0
         self.high_mark = None
+        self.prefix = 'T'
         self.distinct = False
+        self.order_by = []
+        self.default_ordering = True
+        self.extra = SortedDict()  # Maps col_alias -> (col_sql, params).
+        self.extra_select_mask = None
+        self._extra_select_cache = None
+        self.included_inherited_models = self.get_default_inherited_models()
+        self.extra_tables = ()
+        self.extra_order_by = ()
+        self.deferred_loading = (set(), True)
     
     def get_meta(self):
         return self.model._meta
        
-    def clone(self):
+    def clone(self, memo=None):
         c = self.__class__()
         c.model = self.model
         c.base_rel = self.base_rel.clone()
@@ -190,6 +186,10 @@ class QueryTree(object):
         # Almost all of time in cloning is used in here
         c.where = copy.deepcopy(self.where)
         c.having = copy.deepcopy(self.having)
+        # There is no need to deep-copy filter_ops
+        # This will save a _lot_ of time
+        c.filter_ops = self.filter_ops.copy()
+        c.filter_ops[self.op_num] = self.reverse_polish
         c.start_new_op()
         c.aggregates = self.aggregates.copy()
         c.aggregate_select = self.aggregate_select.copy()
@@ -199,7 +199,55 @@ class QueryTree(object):
         c.select_for_update = self.select_for_update
         c.low_mark, c.high_mark = self.low_mark, self.high_mark
         c.distinct = self.distinct
+        c.prefix = self.prefix
+        c.order_by = self.order_by[:]
+        c.default_ordering = self.default_ordering
+        c.extra = self.extra.copy() 
+        c.included_inherited_models = self.included_inherited_models.copy()
+
+        # A tuple that is a set of model field names and either True, if these
+        # are the fields to defer, or False if these are the only fields to
+        # load.
+        self.deferred_loading = (set(), True)
+        c.extra = self.extra.copy()
+        if self.extra_select_mask is None:
+            c.extra_select_mask = None
+        else:
+            c.extra_select_mask = self.extra_select_mask.copy()
+        if self._extra_select_cache is None:
+            c._extra_select_cache = None
+        else:
+            c._extra_select_cache = self._extra_select_cache.copy()
+        c.extra_tables = self.extra_tables
+        c.extra_order_by = self.extra_order_by
+        c.deferred_loading = copy.deepcopy(self.deferred_loading, memo=memo)
         return c
+
+    def get_default_inherited_models(self):
+        return {}
+    
+    def set_aggregate_mask(self, names):
+        "Set the mask of aggregates that will actually be returned by the SELECT"
+        if names is None:
+            self.aggregate_select_mask = None
+        else:
+            self.aggregate_select_mask = set(names)
+        self._aggregate_select_cache = None
+    
+    def clear_deferred_loading(self):
+        """
+        Remove any fields from the deferred loading set.
+        """
+        self.deferred_loading = (set(), True)
+    
+    def clear_select_fields(self):
+        """
+        Clears the list of fields to select (but not extra_select columns).
+        Some queryset types completely replace any existing list of select
+        columns.
+        """
+        self.select = []
+        self.select_fields = []
 
     def get_loaded_field_names(self):
         return []
@@ -263,11 +311,14 @@ class QueryTree(object):
         relations, final_field = [], None
         opts = self.model._meta
         final_field = None
+        has_m2m = False
         for pos, filter_name in enumerate(filter_chain):
             assert final_field == None
             if filter_name == 'pk':
                 filter_name = opts.pk.name 
             field, model, direct, m2m = self.get_field_by_name(opts, filter_name)
+            if m2m:
+                has_m2m = True
             if model:
                 proxied_model = get_proxied_model(opts)
                 for int_model in opts.get_base_chain(model):
@@ -275,7 +326,7 @@ class QueryTree(object):
                         opts = internal_model._meta
                         continue
                     o2o_field = opts.get_ancestor_link(int_model)
-                    relations.append((o2o_field, FOLLOW_FORWARD))
+                    relations.append((o2o_field, FOLLOW_FORWARD, False))
                     opts = int_model._meta
             if m2m:
                 if not direct:
@@ -287,37 +338,27 @@ class QueryTree(object):
                 through_field2_name = field.m2m_reverse_field_name()
                 field2, _, _, _ = through_opts.get_field_by_name(through_field2_name)
                 if direct:
-                    relations.append((field1, FOLLOW_REVERSE))
-                    relations.append((field2, FOLLOW_FORWARD))
+                    relations.append((field1, FOLLOW_REVERSE, True))
+                    relations.append((field2, FOLLOW_FORWARD, False))
                     opts = field.rel.to._meta
                 else:
-                    relations.append((field2, FOLLOW_REVERSE))
-                    relations.append((field1, FOLLOW_FORWARD))
+                    # something fishy here...
+                    relations.append((field2, FOLLOW_REVERSE, True))
+                    relations.append((field1, FOLLOW_FORWARD, False))
                     opts = field.opts
             else:
                 if direct and field.rel:
-                    relations.append((field, FOLLOW_FORWARD))
+                    relations.append((field, FOLLOW_FORWARD, False))
                     opts = field.rel.to._meta
                 elif direct: 
                     final_field = field
                 else:
                     field = field.field
-                    relations.append((field, FOLLOW_REVERSE))
+                    relations.append((field, FOLLOW_REVERSE, True))
                     opts = field.opts 
         if final_field is None:
             final_field = relations.pop()[0]
-        return relations, final_field
-
-    def append_m2m_points(self, join_parts):
-        with_m2m_info = []
-        for part in join_parts:
-            field, direction = part
-            if direction != FOLLOW_REVERSE or field.unique:
-                with_m2m_info.append((field, direction, False))
-            else:
-                with_m2m_info.append((field, direction, True))
-        return with_m2m_info
-
+        return relations, final_field, has_m2m
 
     def trim_join_path(self, join_path, final_field, lookup_type, value):
         """
@@ -325,31 +366,32 @@ class QueryTree(object):
         """
         pos = len(join_path) - 1
         while pos >= 0:
-            field, direction = join_path[pos]
-            if direction == FOLLOW_REVERSE or field.rel.get_related_field() <> final_field:
-                # Cannot trim this - the field is in the related model and there is no foreign
-                # key to it. Thus, we must have the related model in the query.
+            field, direction, _ = join_path[pos]
+            if (direction == FOLLOW_REVERSE or
+                field.rel.get_related_field() <> final_field):
+                # Cannot trim this - the field is in the related model, and the field's
+                # value is not stored in local model foreign key.
+                # Thus, we must have the related model in the query.
                 break
             final_field = field
             join_path.pop()
             pos -= 1
         return final_field
 
-    def add_join_path(self, join_path, filter_info, to_rel=None, parent_negated=False):
-        if to_rel is None:
-            to_rel = self.base_rel
+    def add_join_path(self, join_path, to_rel, parent_negated=False):
         if len(join_path) == 0:
             return to_rel.rel_ident
         current_join, rest_of_joins = join_path[0], join_path[1:]
         for child in to_rel.child_joins:
-            if child.can_reuse(current_join, filter_info):
-                return self.add_join_path(rest_of_joins, filter_info, child.to_rel, child.negated)
+            if child.can_reuse(current_join, self.op_num):
+                child.negated = child.negated or parent_negated
+                return self.add_join_path(rest_of_joins, child.to_rel, child.negated)
         # No child was reusable - need to do a new join! 
-        new_rel = to_rel.add_join(current_join, filter_info, parent_negated)
-        return self.add_join_path(rest_of_joins, filter_info, new_rel)
+        new_rel = to_rel.add_join(current_join, self.op_num, parent_negated)
+        return self.add_join_path(rest_of_joins, new_rel, parent_negated)
  
 
-    def add_filter(self, filter_expr, connector=AND, negate=False, where_node=None):
+    def add_filter(self, filter_expr, connector=AND, negate=False):
         filter_chain, value = filter_expr
         filter_chain = filter_chain.split(LOOKUP_SEP)
         if not filter_chain:
@@ -375,45 +417,48 @@ class QueryTree(object):
             value = SQLEvaluator(value, self)
             having_clause = value.contains_aggregate
 
-        join_path, final_field = self.filter_chain_to_join_path(filter_chain)
-        final_field = self.trim_join_path(join_path, final_field, lookup_type, value)
-        # TODO - the m2m check could be done easily already in filter_chaing_to...
-        join_path_with_m2m = self.append_m2m_points(join_path)
-        filter_info = (self.op_num, lookup_type, connector, negate, value)
-        final_rel_ident = self.add_join_path(join_path_with_m2m, filter_info)
-        where_node.add(
-            (Constraint(final_rel_ident, final_field.column, final_field), 
-             lookup_type, value), connector
-        )
-        
+        if lookup_type == 'exists':
+            # Exists is a very special kind of an lookup - 
+            # it doesn't relate to any field in the query.
+            filter_ = (Constraint('', '', None), lookup_type, value), connector
+            self.reverse_polish.append(filter_)
+            return
+        join_path, final_field, _ = self.filter_chain_to_join_path(filter_chain)
+        final_field = self.trim_join_path(
+            join_path, final_field, lookup_type, value)
+        final_rel_ident = self.add_join_path(
+            join_path, self.base_rel, parent_negated=negate)
 
-    def add_q(self, q_object, force_having=False, needs_prune=True, parent_negated=False):
+        filter_ = (
+            (Constraint(final_rel_ident, final_field.column, final_field), 
+             lookup_type, value), connector)
+        self.reverse_polish.append(filter_)
+
+
+    def add_q(self, q_object, force_having=False, 
+              needs_prune=True, parent_negated=False):
+        # This could be cleaned up...
         if hasattr(q_object, 'add_to_query'):
             q_object.add_to_query(self, used_aliases)
             return
         if q_object.connector == OR and not force_having:
             force_having = self.need_force_having(q_object)
-        if force_having:
-            where_node = self.having
-        else:
-            where_node = self.where
-        subtree = False
-        if where_node and q_object.connector != AND and len(q_object) > 1:
-            where_node.start_subtree(AND)
-            subtree = True
+           
         connector = AND
+        first = True
         for child in q_object.children:
-            where_node.start_subtree(connector)
             if isinstance(child, Node):
                 self.add_q(child, force_having=force_having, needs_prune=False, parent_negated=parent_negated or q_object.negated)
             else:
-                self.add_filter(child, connector, q_object.negated or parent_negated, where_node=where_node)
-            where_node.end_subtree()
+                self.add_filter(
+                    child, connector=connector, 
+                    negate=q_object.negated or parent_negated)
             connector = q_object.connector 
+            if not first:
+                self.reverse_polish.append(q_object.connector)
+            first = False
         if q_object.negated:
-            where_node.negate() 
-        if subtree:
-            where_node.end_subtree()
+            self.reverse_polish.append('NOT')
         if needs_prune:
             self.prune_tree()
 
@@ -421,76 +466,137 @@ class QueryTree(object):
         pass
         # print "prune doing nothing at all..."
 
-
-    def as_sqlish(self, ident=0, prefix='T'):
-        assert ord(prefix) <= ord('Z')
-        self.prepare_for_execution(prefix=prefix)
-        buf = []
-        buf.append(" " * ident + "SELECT ... ")
-        buf.append("  FROM " + self.base_rel.from_clause_sqlish())
-        for child in self.base_rel.child_joins:
-            buf.append("  " + child.join_clause_sqlish())
-        from django.db import connection
-        def qn(val):
-            return val
-        where_sql, where_params = self.where.as_sql(qn, connection)
-        if where_sql or self.subqueries:
-            buf.append(" WHERE " + where_sql.strip())
-            for subq_join, subq_where, subq_strat in self.subqueries:
-                 subq = self.__class__()
-                 subq.prepare_new(subq_join.to_rel.model)
-                 subq.base_rel = subq_join.to_rel
-                 subq.where = subq_where
-                 subq.select = {} # denotes "select 1"
-                 # The following monstrosity is what happens when coding tired
-                 buf.append(
-                     " " * (ident + 7) + ((where_sql and "AND") or '') +
-                     " NOT EXISTS (\n" 
-                     + subq.as_sqlish(ident=ident + 10, prefix=chr(ord(prefix)+1)) + 
-                     '\n ' + " " * (ident + 7) + ')'
-                 )
-
-        return (u'\n' + u' ' * ident) .join(buf) % tuple(where_params)
-    
     def final_prune(self):
         return
 
-    def prepare_for_execution(self, prefix='T'):
+    def bump_prefix(self):
+        self.prefix = chr(ord(self.prefix)+1)
+        assert ord(self.prefix) <= ord('Z')
+
+    def prepare_for_execution(self):
         # does various tasks related to preparing the query
         # for execution. Many of these things are SQL specific
+        self.filter_ops[self.op_num] = self.reverse_polish[:]
+        self.start_new_op()
         self.final_prune()
         self.subqueries = []
         self.extract_subqueries(self.base_rel)
-        change_map = self.base_rel.rel_idents_to_aliases(prefix)
+        change_map = self.base_rel.rel_idents_to_aliases(self.prefix)
         self.aliases = set(change_map.items())
+        self.where = self.filter_ops_to_where(self.filter_ops.values())
         self.where.relabel_aliases(change_map)
         self.having.relabel_aliases(change_map)
         self.select_cols = [(change_map[col[0]], col[1].column) for col in self.selects]
     
     def extract_subqueries(self, rel):
         for child in rel.child_joins:
-            if child.has_or and child.negated and child.multirow:
-                rel.child_joins.remove(child)         
+            if child.negated and child.multirow:
+                rel.child_joins.remove(child) 
                 subq_base_rel = child.to_rel
-                base_rel_idents = subq_base_rel.collect_rel_idents()
-                subq_where = self.where.__class__()
-                self.extract_subq_params(self.where, base_rel_idents, subq_where)
-                subquery = (child, subq_where, SUBQ_NOT_EXISTS)
-                self.subqueries.append(subquery)
-                continue
-            self.extract_subqueries(child.to_rel)
-    
-    def extract_subq_params(self, extract_from, idents, extract_to):
-        connector = extract_from.connector
-        extract_to.start_subtree(connector)
-        for child in extract_from.children:
-            if isinstance(child, Node):
-                self.extract_subq_params(child, idents, extract_to)
+                cond, joins = self.extract_single_subq(subq_base_rel)
+                # collect all the relations in the subtree
+                subq = self.__class__()
+                subq.prepare_new(subq_base_rel.model)
+                subq.base_rel = subq_base_rel
+                if cond[-1] != 'NOT':
+                    cond.append('NOT')
+                else:
+                    cond.pop()
+                subq.base_rel.child_joins += joins
+                # Add a connection to the outer query
+                for from_field, to_field in child.join_cols:
+                    cond.append(
+                        ((Constraint(child.from_rel.rel_ident, from_field.column, 
+                                   from_field),
+                        'exact', SimpleExpr(child.to_rel.rel_ident, to_field.column)), 
+                        AND)
+                    )
+                    #subq.where.add(
+                    #                        #)
+                    pass
+                subq.filter_ops = {child.op_num: cond}
+                subq.selects = [] # -> will result in "select 1"
+                self.add_filter(('__exists', subq), negate=True) 
+                if self.reverse_polish[-1] != 'NOT':
+                    self.reverse_polish.append('NOT')
+                else:
+                    self.reverse_polish.pop()
+                if len(self.reverse_polish) > 2:
+                    self.reverse_polish.append('AND')
+                self.filter_ops[self.op_num] = self.reverse_polish
+                subq.bump_prefix()
+                subq.prepare_for_execution()
             else:
-                if child[0].alias in idents:
-                    extract_from.children.remove(child)
-                    super(WhereNode, extract_to).add(child, connector)
-        extract_to.end_subtree()
+                self.extract_subqueries(child.to_rel)
+    
+    def extract_single_subq(self, subq_base_rel):
+        extracted_op_cond = None
+        for key, conditions in self.filter_ops.items():
+            # TODO: cleanup
+            found = False
+            for cond in conditions:
+                if not isinstance(cond, tuple):
+                    continue
+                if cond[0][0].alias == subq_base_rel.rel_ident:
+                    found = True
+                    break
+            if found:
+                extracted_op_cond = conditions
+                del self.filter_ops[key]
+                break
+        assert extracted_op_cond, "Well, this should never happen..."
+        # We need to collect those joins that need to be pushed
+        # to the subquery - that is all those joins which are referenced
+        # in the extracted_op_cond, and which are multirow.
+        # The joins below subq_base_rel are already, well, below it.
+        joins = []
+        extract_joins_for_idents =[cond[0][0].alias for cond in extracted_op_cond if isinstance(cond, tuple)]  
+        self.collect_related_joins(
+            base_rel=self.base_rel,
+            idents=extract_joins_for_idents,
+            collect_to=joins
+        )
+        #where = self.filter_ops_to_where([extracted_op_cond])
+        #where.negate()
+        return extracted_op_cond, joins
+
+    def collect_related_joins(self, base_rel, idents, collect_to):
+        for join in base_rel.child_joins:
+            if join.to_rel.rel_ident in idents and join.multirow:
+                join.reverse_negates()
+                collect_to.append(join)
+                base_rel.child_joins.remove(join)
+            else:
+                self.collect_related_joins(join.to_rel, idents, collect_to)
+
+    def filter_ops_to_where(self, filter_ops):
+        # takes a list of filter operations in reverse polish notation
+        # turns the list into where tree. 
+        where = self.where.__class__()
+        where.start_subtree(AND)
+        for reverse_polish in filter_ops:
+            self.reverse_polish_to_where(reversed(reverse_polish), where)
+        where.end_subtree()
+        return where
+
+    def reverse_polish_to_where(self, reverse_iter, where, parent_connector=AND, ops=0):
+        for op in reverse_iter:
+            if op == 'NOT':
+                self.reverse_polish_to_where(
+                    reverse_iter, where, parent_connector, ops=1
+                )
+                where.negate()
+            elif op in (AND, OR):
+                if op != parent_connector:
+                    where.start_subtree(op)
+                self.reverse_polish_to_where(reverse_iter, where, op, ops=2)
+                if op != parent_connector:
+                    where.end_subtree()
+            else:
+                ops -= 1
+                where.add(*op)
+            if ops == 0:
+                return
 
     def __iter__(self):
         # Always execute a new query for a new iterator.
@@ -528,8 +634,142 @@ class QueryTree(object):
         c.extra_select = ['1']
         c.clear_ordering(True)
         c.set_limits(high=1)
-        compiler = q.get_compiler(using=using)
+        compiler = c.get_compiler(using=using)
         return bool(compiler.execute_sql(SINGLE))
 
     def get_columns(self):
         return None
+
+    def relabel_aliases(self, change_map):
+        self.where.relabel_aliases(change_map)
+        self.having.relabel_aliases(change_map)
+        self.select_cols = [(change_map[col[0]], col[1].column) for col in self.selects]
+
+    def print_ops(self):
+        ops = [op for op in self.filter_ops.items()]
+        ops.sort()
+        for op in ops:
+            print op[0]
+            ident = 1 
+            prev_was_connector = False
+            for cond in op[1]:
+                if isinstance(cond, tuple):
+                    if prev_was_connector:
+                        ident -= 1
+                        prev_was_connector = False
+                    print ("  " * ident) + "%s.%s %s %s" % (cond[0][0].alias, cond[0][0].col, cond[0][1], cond[0][2])
+                    continue
+                if cond in (AND, OR):
+                    prev_was_connector = True
+                    ident += 1
+                print ("  " * ident)  + cond
+                    
+        if not ops:
+            print "  " + "No conditions" 
+    
+    def can_filter(self):
+        """
+        Returns True if adding filters to this instance is still possible.
+
+        Typically, this means no limits or offsets have been put on the results.
+        """
+        return not self.low_mark and self.high_mark is None
+    
+    def __str__(self):
+        """
+        Returns the query as a string of SQL with the parameter values
+        substituted in (use sql_with_params() to see the unsubstituted string).
+
+        Parameter values won't necessarily be quoted correctly, since that is
+        done by the database interface at execution time.
+        """
+        sql, params = self.sql_with_params()
+        return sql % params
+
+    def sql_with_params(self):
+        """
+        Returns the query as an SQL string and the parameters that will be
+        subsituted into the query.
+        """
+        return self.get_compiler(DEFAULT_DB_ALIAS).as_sql()
+    
+    def add_ordering(self, *ordering):
+        """
+        Adds items from the 'ordering' sequence to the query's "order by"
+        clause. These items are either field names (not column names) --
+        possibly with a direction prefix ('-' or '?') -- or ordinals,
+        corresponding to column positions in the 'select' list.
+
+        If 'ordering' is empty, all ordering is cleared from the query.
+        """
+        errors = []
+        for item in ordering:
+            if not ORDER_PATTERN.match(item):
+                errors.append(item)
+        if errors:
+            raise FieldError('Invalid order_by arguments: %s' % errors)
+        if ordering:
+            self.order_by.extend(ordering)
+        else:
+            self.default_ordering = False
+
+    def clear_ordering(self, force_empty=False):
+        """
+        Removes any ordering settings. If 'force_empty' is True, there will be
+        no ordering in the resulting query (not even the model's default).
+        """
+        self.order_by = []
+        self.extra_order_by = ()
+        if force_empty:
+            self.default_ordering = False
+    
+    def set_extra_mask(self, names):
+        """
+        Set the mask of extra select items that will be returned by SELECT,
+        we don't actually remove them from the Query since they might be used
+        later
+        """
+        if names is None:
+            self.extra_select_mask = None
+        else:
+            self.extra_select_mask = set(names)
+        self._extra_select_cache = None
+    
+    def add_fields(self, field_names, allow_m2m=True):
+        """
+        Adds the given (model) fields to the select set. The field names are
+        added in the order specified.
+        """
+        for name in field_names:
+             join_path, final_field, has_m2m = self.filter_chain_to_join_path(
+                 name.split(LOOKUP_SEP))
+             if has_m2m and not allow_m2m:
+                 raise FieldError("Invalid field name: '%s'" % name)
+             field = self.trim_join_path(
+                 join_path, final_field, lookup_type=None, value=None)
+             final_rel_ident = self.add_join_path(join_path, self.base_rel)
+             col = field.column
+             self.select.append((final_rel_ident, col))
+             self.select_fields.append(field)
+        self.remove_inherited_models()
+    
+    def remove_inherited_models(self):
+        self.included_inherited_models = {}
+
+class SimpleExpr(object):
+    """
+    This is here just to allow "tbl1"."col1" in where conditions, see
+    extract_subquery. There must be a better way of doing this...
+    """
+    def __init__(self, alias, col):
+	self.alias = alias
+	self.col = col
+	
+    def as_sql(self, qn, connection):
+	return "%s.%s" % (qn(self.alias), qn(self.col)), []
+
+    def relabel_aliases(self, change_map):
+	if self.alias in change_map:
+	    self.alias = change_map[self.alias]
+    def prepare(self):
+        return self

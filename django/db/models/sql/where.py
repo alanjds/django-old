@@ -173,6 +173,13 @@ class WhereNode(tree.Node):
                               connection.operators[lookup_type] % cast_sql,
                               extra), params)
 
+        if lookup_type == 'exists':
+            if not value_annot:
+                raise EmptyResultSet
+            if not extra:
+                raise NotImplementedError
+            return ('EXISTS %s' % extra), params
+       
         if lookup_type == 'in':
             if not value_annot:
                 raise EmptyResultSet
@@ -342,3 +349,11 @@ class Constraint(object):
     def relabel_aliases(self, change_map):
         if self.alias in change_map:
             self.alias = change_map[self.alias]
+
+class EmptyConstraint(object):
+    def relabel_aliases(self, change_map):
+        return
+    def prepare(self, value):
+        return
+    def process(self):
+        return

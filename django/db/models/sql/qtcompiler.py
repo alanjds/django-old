@@ -265,21 +265,16 @@ class QueryTreeSQLCompiler(object):
                 col_aliases.add(col)
         """
         self._select_aliases = aliases
+        if not result:
+            return ['1']
         return result
 
     def join_sql(self, join, buf, qn, qn2):
         join_cond = []
-        from django.db.models.querytree import FOLLOW_FORWARD
-        for field, direction in join.join_fields:
-            if direction == FOLLOW_FORWARD:
-                from_col = field.column
-                to_col = field.rel.get_related_field().column 
-            else:
-                from_col = field.rel.get_related_field().column
-                to_col = field.column
+        for from_field, to_field in join.join_cols:
             join_cond.append("%s.%s = %s.%s" % (
-                qn2(join.from_rel.alias), qn(from_col),
-                qn2(join.to_rel.alias), qn(to_col)
+                qn2(join.from_rel.alias), qn(from_field.column),
+                qn2(join.to_rel.alias), qn(to_field.column)
             ))
         # TODO: handle extra join conditions
         join_cond = ' AND '.join(join_cond)

@@ -1,6 +1,7 @@
 import re
 
 # Valid query types (a dictionary is used for speedy lookups).
+# howzabout a set...
 QUERY_TERMS = dict([(x, None) for x in (
     'exact', 'iexact', 'contains', 'icontains', 'gt', 'gte', 'lt', 'lte', 'in',
     'startswith', 'istartswith', 'endswith', 'iendswith', 'range', 'year',

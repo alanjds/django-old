@@ -297,7 +297,7 @@ class QueryTreeSQLCompiler(object):
         qn2 = self.connection.ops.quote_name
         base_rel = self.query.base_rel
         result.append(
-            "%s %s" % (qn(base_rel.model._meta.db_table), qn2(base_rel.alias))
+            "%s %s" % (qn(base_rel.model._meta.db_table), qn(base_rel.alias))
         )
         for join in base_rel.child_joins:
              self.join_sql(join, result, qn, qn2)

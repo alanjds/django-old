@@ -144,14 +144,13 @@ class QueryTree(object):
     # prepare_new, or in clone()
     def start_new_op(self):
         self.op_num = op_sequence_generator.next()
-        self.op_stack = []
         self.reverse_polish = []
 
     def prepare_new(self, model):
-        self.model = model
         self.start_new_op()
+        self.model = model
         self.base_rel = Relation(model, self.op_num)
-        self.selects = [(self.base_rel.rel_ident, f) for f in model._meta.fields]
+        self.selects = [(self.base_rel.rel_ident, f.column) for f in model._meta.fields]
         self.filter_ops = {}
         self.where = WhereNode()
         self.having = WhereNode()
@@ -246,7 +245,7 @@ class QueryTree(object):
         Some queryset types completely replace any existing list of select
         columns.
         """
-        self.select = []
+        self.selects = []
         self.select_fields = []
 
     def get_loaded_field_names(self):
@@ -476,17 +475,16 @@ class QueryTree(object):
     def prepare_for_execution(self):
         # does various tasks related to preparing the query
         # for execution. Many of these things are SQL specific
-        self.filter_ops[self.op_num] = self.reverse_polish[:]
-        self.start_new_op()
+        assert not self.reverse_polish
         self.final_prune()
         self.subqueries = []
         self.extract_subqueries(self.base_rel)
         change_map = self.base_rel.rel_idents_to_aliases(self.prefix)
-        self.aliases = set(change_map.items())
+        self.aliases = set(change_map.values())
         self.where = self.filter_ops_to_where(self.filter_ops.values())
         self.where.relabel_aliases(change_map)
         self.having.relabel_aliases(change_map)
-        self.select_cols = [(change_map[col[0]], col[1].column) for col in self.selects]
+        self.select_cols = [(change_map[col[0]], col[1]) for col in self.selects]
     
     def extract_subqueries(self, rel):
         for child in rel.child_joins:
@@ -749,7 +747,7 @@ class QueryTree(object):
                  join_path, final_field, lookup_type=None, value=None)
              final_rel_ident = self.add_join_path(join_path, self.base_rel)
              col = field.column
-             self.select.append((final_rel_ident, col))
+             self.selects.append((final_rel_ident, col))
              self.select_fields.append(field)
         self.remove_inherited_models()
     

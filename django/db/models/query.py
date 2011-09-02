@@ -745,6 +745,7 @@ class QuerySet(object):
         """
         assert self.query.can_filter(), \
                 "Cannot reorder a query once a slice has been taken."
+        import ipdb; ipdb.set_trace()
         obj = self._clone()
         obj.query.clear_ordering()
         obj.query.add_ordering(*field_names)
@@ -846,11 +847,9 @@ class QuerySet(object):
         if klass is None:
             klass = self.__class__
         query = self.query.clone()
-        #query2 = self.query2.clone()
         if self._sticky_filter:
             query.filter_is_sticky = True
         c = klass(model=self.model, query=query, using=self._db)
-        # c.query2 = query2
         c._for_write = self._for_write
         c.__dict__.update(kwargs)
         if setup and hasattr(c, '_setup_query'):

@@ -9,7 +9,7 @@ from django.db.models.query_utils import (Q, select_related_descend,
     deferred_class_factory, InvalidQuery)
 from django.db.models.deletion import Collector
 from django.db.models import signals, sql
-from django.db.models.querytree import QueryTree
+from django.db.models.sql.querytree import QueryTree
 
 # Used to control how many objects are worked with at once in some cases (e.g.
 # when deleting objects).
@@ -31,8 +31,7 @@ class QuerySet(object):
         # EmptyQuerySet instantiates QuerySet with model as None
         self._db = using
         # self.query = query or sql.Query(self.model)
-        self.query = QueryTree() 
-        self.query.prepare_new(model)
+        self.query = query or QueryTree(model) 
         self._result_cache = None
         self._iter = None
         self._sticky_filter = False
@@ -536,7 +535,9 @@ class QuerySet(object):
         assert self.query.can_filter(), \
                 "Cannot update a query once a slice has been taken."
         self._for_write = True
-        query = self.query.clone(sql.UpdateQuery)
+        query = self.query.clone()
+        query.__class__ = sql.UpdateQuery
+        query._setup_query()
         query.add_update_values(kwargs)
         if not transaction.is_managed(using=self.db):
             transaction.enter_transaction_management(using=self.db)
@@ -565,7 +566,9 @@ class QuerySet(object):
         """
         assert self.query.can_filter(), \
                 "Cannot update a query once a slice has been taken."
-        query = self.query.clone(sql.UpdateQuery)
+        query = self.query.clone()
+        query.__class__ = sql.UpdateQuery
+        query._setup_query()
         query.add_update_fields(values)
         self._result_cache = None
         return query.get_compiler(self.db).execute_sql(None)
@@ -745,7 +748,6 @@ class QuerySet(object):
         """
         assert self.query.can_filter(), \
                 "Cannot reorder a query once a slice has been taken."
-        import ipdb; ipdb.set_trace()
         obj = self._clone()
         obj.query.clear_ordering()
         obj.query.add_ordering(*field_names)
@@ -1094,7 +1096,9 @@ class DateQuerySet(QuerySet):
         instance.
         """
         self.query.clear_deferred_loading()
-        self.query = self.query.clone(klass=sql.DateQuery, setup=True)
+        self.query = self.query.clone()
+        self.query.__class__ = sql.DateQuery
+        self.query.setup = True
         self.query.select = []
         self.query.add_date_select(self._field_name, self._kind, self._order)
 

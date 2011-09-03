@@ -13,7 +13,7 @@ from django.db.utils import DatabaseError
 # the implementation can be in another file, but still allow
 # backend compiler() to work.
 
-from django.db.models.sql.qtcompiler import QueryTreeSQLCompiler
+from django.db.models.sql.qtcompiler import QueryTreeSQLCompiler, QTUpdateCompiler, QTDateCompiler
 
 class SQLCompiler(object):
     def __init__(self, query, connection, using):

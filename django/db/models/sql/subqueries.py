@@ -7,13 +7,14 @@ from django.db.models.fields import DateField, FieldDoesNotExist
 from django.db.models.sql.constants import *
 from django.db.models.sql.datastructures import Date
 from django.db.models.sql.query import Query
+from django.db.models.sql.querytree import QueryTree
 from django.db.models.sql.where import AND, Constraint
 
 
 __all__ = ['DeleteQuery', 'UpdateQuery', 'InsertQuery', 'DateQuery',
         'AggregateQuery']
 
-class DeleteQuery(Query):
+class DeleteQuery(QueryTree):
     """
     Delete queries are done through this class, since they are more constrained
     than general queries.
@@ -41,12 +42,12 @@ class DeleteQuery(Query):
                     pk_list[offset : offset + GET_ITERATOR_CHUNK_SIZE]), AND)
             self.do_query(self.model._meta.db_table, where, using=using)
 
-class UpdateQuery(Query):
+class UpdateQuery(QueryTree):
     """
     Represents an "update" SQL query.
     """
 
-    compiler = 'SQLUpdateCompiler'
+    compiler = 'QTUpdateCompiler'
 
     def __init__(self, *args, **kwargs):
         super(UpdateQuery, self).__init__(*args, **kwargs)
@@ -63,9 +64,12 @@ class UpdateQuery(Query):
         if not hasattr(self, 'related_updates'):
             self.related_updates = {}
 
-    def clone(self, klass=None, **kwargs):
-        return super(UpdateQuery, self).clone(klass,
-                related_updates=self.related_updates.copy(), **kwargs)
+    def clone(self, klass=None, memo=None):
+        c = super(UpdateQuery, self).clone(memo=memo)
+        c.__class__ = klass or self.__class__ 
+        c.values = self.values[:]
+        c.related_updates = self.related_updates.copy()
+        return c
 
 
     def update_batch(self, pk_list, values, using):
@@ -131,7 +135,7 @@ class UpdateQuery(Query):
             result.append(query)
         return result
 
-class InsertQuery(Query):
+class InsertQuery(QueryTree):
     compiler = 'SQLInsertCompiler'
 
     def __init__(self, *args, **kwargs):
@@ -140,14 +144,13 @@ class InsertQuery(Query):
         self.values = []
         self.params = ()
 
-    def clone(self, klass=None, **kwargs):
-        extras = {
-            'columns': self.columns[:],
-            'values': self.values[:],
-            'params': self.params
-        }
-        extras.update(kwargs)
-        return super(InsertQuery, self).clone(klass, **extras)
+    def clone(self):
+        c = super(InsertQuery, self).clone()
+        c.columns = self.columns[:]
+        c.values = self.values[:]
+        c.params = self.params
+        return c
+
 
     def insert_values(self, insert_values, raw_values=False):
         """
@@ -170,14 +173,14 @@ class InsertQuery(Query):
             self.params += tuple(values)
             self.values.extend(placeholders)
 
-class DateQuery(Query):
+class DateQuery(QueryTree):
     """
     A DateQuery is a normal query, except that it specifically selects a single
     date field. This requires some special handling when converting the results
     back to Python objects, so we put it in a separate class.
     """
 
-    compiler = 'SQLDateCompiler'
+    compiler = 'QTDateCompiler'
 
     def add_date_select(self, field_name, lookup_type, order='ASC'):
         """
@@ -209,7 +212,7 @@ class DateQuery(Query):
         if field.null:
             self.add_filter(("%s__isnull" % field_name, False))
 
-class AggregateQuery(Query):
+class AggregateQuery(QueryTree):
     """
     An AggregateQuery takes another query as a parameter to the FROM
     clause and only selects the elements in the provided list.

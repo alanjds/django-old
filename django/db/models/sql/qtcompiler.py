@@ -1,7 +1,26 @@
 from django.db.models.sql.constants import *
 from django.db.models.sql.datastructures import EmptyResultSet
+from django.db.models.sql.querytree import QueryTree, get_order_dir
+
+def empty_iter():
+    """
+    Returns an iterator containing no results.
+    """
+    yield iter([]).next()
 
 class QueryTreeSQLCompiler(object):
+    def pre_sql_setup(self):
+        """
+        Does any necessary class setup immediately prior to producing SQL. This
+        is for things that can't necessarily be done in __init__ because we
+        might not have all the pieces in place at that time.
+        """
+        if (not self.query.select and self.query.default_cols and not
+                self.query.included_inherited_models):
+            self.query.setup_inherited_models()
+        if self.query.select_related and not self.query.related_select_cols:
+            self.fill_related_selections()
+
     def __init__(self, query, connection, using):
         self.query = query
         self.connection = connection
@@ -125,8 +144,7 @@ class QueryTreeSQLCompiler(object):
             return '', ()
 
         out_cols = self.get_columns(with_col_aliases)
-        # ordering, ordering_group_by = self.get_ordering()
-        ordering, ordering_group_by = [], []
+        ordering, ordering_group_by = self.get_ordering()
 
         # This must come after 'select' and 'ordering' -- see docstring of
         # get_from_clause() for details.
@@ -195,6 +213,145 @@ class QueryTreeSQLCompiler(object):
                 raise DatabaseError('NOWAIT is not supported on this database backend.')
             result.append(self.connection.ops.for_update_sql(nowait=nowait))
         return ' '.join(result), tuple(params)
+    
+    def get_ordering(self):
+        """
+        Returns a tuple containing a list representing the SQL elements in the
+        "order by" clause, and the list of SQL elements that need to be added
+        to the GROUP BY clause as a result of the ordering.
+
+        Also sets the ordering_aliases attribute on this instance to a list of
+        extra aliases needed in the select.
+
+        Determining the ordering SQL can change the tables we need to include,
+        so this should be run *before* get_from_clause().
+        """
+        if self.query.extra_order_by:
+            ordering = self.query.extra_order_by
+        elif not self.query.default_ordering:
+            ordering = self.query.order_by
+        else:
+            ordering = self.query.order_by or self.query.model._meta.ordering
+        qn = self.quote_name_unless_alias
+        qn2 = self.connection.ops.quote_name
+        distinct = self.query.distinct
+        select_aliases = self._select_aliases
+        result = []
+        group_by = []
+        ordering_aliases = []
+        if self.query.standard_ordering:
+            asc, desc = ORDER_DIR['ASC']
+        else:
+            asc, desc = ORDER_DIR['DESC']
+
+        # It's possible, due to model inheritance, that normal usage might try
+        # to include the same field more than once in the ordering. We track
+        # the table/column pairs we use and discard any after the first use.
+        processed_pairs = set()
+
+        for field in ordering:
+            if field == '?':
+                result.append(self.connection.ops.random_function_sql())
+                continue
+            if isinstance(field, int):
+                if field < 0:
+                    order = desc
+                    field = -field
+                else:
+                    order = asc
+                result.append('%s %s' % (field, order))
+                group_by.append((field, []))
+                continue
+            col, order = get_order_dir(field, asc)
+            if col in self.query.aggregate_select:
+                result.append('%s %s' % (qn(col), order))
+                continue
+            if '.' in field:
+                # This came in through an extra(order_by=...) addition. Pass it
+                # on verbatim.
+                table, col = col.split('.', 1)
+                if (table, col) not in processed_pairs:
+                    elt = '%s.%s' % (qn(table), col)
+                    processed_pairs.add((table, col))
+                    if not distinct or elt in select_aliases:
+                        result.append('%s %s' % (elt, order))
+                        group_by.append((elt, []))
+            elif get_order_dir(field)[0] not in self.query.extra_select:
+                # 'col' is of the form 'field' or 'field1__field2' or
+                # '-field1__field2__field', etc.
+                for table, col, order in self.find_ordering_name(field,
+                        self.query.model._meta, default_order=asc):
+                    if (table, col) not in processed_pairs:
+                        elt = '%s.%s' % (qn(table), qn2(col))
+                        processed_pairs.add((table, col))
+                        if distinct and elt not in select_aliases:
+                            ordering_aliases.append(elt)
+                        result.append('%s %s' % (elt, order))
+                        group_by.append((elt, []))
+            else:
+                elt = qn2(col)
+                if distinct and col not in select_aliases:
+                    ordering_aliases.append(elt)
+                result.append('%s %s' % (elt, order))
+                group_by.append(self.query.extra_select[col])
+        self.query.ordering_aliases = ordering_aliases
+        return result, group_by
+
+    def find_ordering_name(self, name, opts, alias=None, default_order='ASC',
+            already_seen=None):
+        """
+        Returns the table alias (the name might be ambiguous, the alias will
+        not be) and column name for ordering by the given 'name' parameter.
+        The 'name' is of the form 'field1__field2__...__fieldN'.
+        """
+        name, order = get_order_dir(name, default_order)
+        pieces = name.split(LOOKUP_SEP)
+        if not alias:
+            alias = self.query.get_initial_alias()
+        import ipdb; ipdb.set_trace()
+        field, target, opts, joins, last, extra = self.query.setup_joins(pieces,
+                opts, alias, False)
+        alias = joins[-1]
+        col = field.column
+        #if not field.rel:
+            # To avoid inadvertent trimming of a necessary alias, use the
+            # refcount to show that we are referencing a non-relation field on
+            # the model.
+            #self.query.ref_alias(alias)
+
+        # Must use left outer joins for nullable fields and their relations.
+        #self.query.promote_alias_chain(joins,
+        #    self.query.alias_map[joins[0]][JOIN_TYPE] == self.query.LOUTER)
+
+        # If we get to this point and the field is a relation to another model,
+        # append the default ordering for that model.
+        if field.rel and len(joins) > 1 and field.rel.to._meta.ordering:
+            # Firstly, avoid infinite loops.
+            if not already_seen:
+                already_seen = set()
+            join_tuple = tuple([self.query.alias_map[j][TABLE_NAME] for j in joins])
+            if join_tuple in already_seen:
+                raise FieldError('Infinite loop caused by ordering.')
+            already_seen.add(join_tuple)
+
+            results = []
+            for item in opts.ordering:
+                results.extend(self.find_ordering_name(item, opts, alias,
+                        order, already_seen))
+            return results
+
+        #if alias:
+            # We have to do the same "final join" optimisation as in
+            # add_filter, since the final column might not otherwise be part of
+            # the select set (so we can't order on it).
+            # while 1:
+            #    join = self.query.alias_map[alias]
+            #    if col != join[RHS_JOIN_COL]:
+            #        break
+            #    self.query.unref_alias(alias)
+            #    alias = join[LHS_ALIAS]
+            #    col = join[LHS_JOIN_COL]
+        return [(alias, col, order)]
 
 
     def get_columns(self, with_aliases=False):
@@ -216,6 +373,7 @@ class QueryTreeSQLCompiler(object):
         else:
             col_aliases = set()
         if self.query.select_cols:
+            only_load = self.deferred_to_columns()
             for col in self.query.select_cols:
                 if isinstance(col, (list, tuple)):
                     alias, column = col
@@ -284,6 +442,16 @@ class QueryTreeSQLCompiler(object):
         ))
         for join in join.to_rel.child_joins:
             self.join_sql(join, buf, qn, qn2)
+    
+    def deferred_to_columns(self):
+        """
+        Converts the self.deferred_loading data structure to mapping of table
+        names to sets of column names which are to be loaded. Returns the
+        dictionary.
+        """
+        columns = {}
+        self.query.deferred_to_data(columns, self.query.deferred_to_columns_cb)
+        return columns
 
     def get_from_clause(self):
         """
@@ -303,3 +471,137 @@ class QueryTreeSQLCompiler(object):
              self.join_sql(join, result, qn, qn2)
         return result, []
 
+class QTUpdateCompiler(QueryTreeSQLCompiler):
+    def as_sql(self):
+        """
+        Creates the SQL for this query. Returns the SQL string and list of
+        parameters.
+        """
+        from django.db.models.base import Model
+
+        self.pre_sql_setup()
+        if not self.query.values:
+            return '', ()
+        table = self.query.get_meta().db_table
+        qn = self.quote_name_unless_alias
+        self.query.where.relabel_aliases({self.query.base_rel.alias: table})
+        result = ['UPDATE %s' % qn(table) ]
+        result.append('SET')
+        values, update_params = [], []
+        for field, model, val in self.query.values:
+            if hasattr(val, 'prepare_database_save'):
+                val = val.prepare_database_save(field)
+            else:
+                val = field.get_db_prep_save(val, connection=self.connection)
+
+            # Getting the placeholder for the field.
+            if hasattr(field, 'get_placeholder'):
+                placeholder = field.get_placeholder(val, self.connection)
+            else:
+                placeholder = '%s'
+
+            if hasattr(val, 'evaluate'):
+                val = SQLEvaluator(val, self.query, allow_joins=False)
+            name = field.column
+            if hasattr(val, 'as_sql'):
+                sql, params = val.as_sql(qn, self.connection)
+                values.append('%s = %s' % (qn(name), sql))
+                update_params.extend(params)
+            elif val is not None:
+                values.append('%s = %s' % (qn(name), placeholder))
+                update_params.append(val)
+            else:
+                values.append('%s = NULL' % qn(name))
+        if not values:
+            return '', ()
+        result.append(', '.join(values))
+        where, params = self.query.where.as_sql(qn=qn, connection=self.connection)
+        if where:
+            result.append('WHERE %s' % where)
+        return ' '.join(result), tuple(update_params + params)
+
+    def execute_sql(self, result_type):
+        """
+        Execute the specified update. Returns the number of rows affected by
+        the primary update query. The "primary update query" is the first
+        non-empty query that is executed. Row counts for any subsequent,
+        related queries are not available.
+        """
+        cursor = super(QTUpdateCompiler, self).execute_sql(result_type)
+        rows = cursor and cursor.rowcount or 0
+        is_empty = cursor is None
+        del cursor
+        for query in self.query.get_related_updates():
+            aux_rows = query.get_compiler(self.using).execute_sql(result_type)
+            if is_empty:
+                rows = aux_rows
+                is_empty = False
+        return rows
+
+    def pre_sql_setup(self):
+        """
+        If the update depends on results from other tables, we need to do some
+        munging of the "where" conditions to match the format required for
+        (portable) SQL updates. That is done here.
+
+        Further, if we are going to be running multiple updates, we pull out
+        the id values to update at this point so that they don't change as a
+        result of the progressive updates.
+        """
+        self.query.select_related = False
+        self.query.clear_ordering(True)
+        super(QTUpdateCompiler, self).pre_sql_setup()
+        count = self.query.count_active_tables()
+        if not self.query.related_updates and count == 1:
+            return
+
+        # We need to use a sub-select in the where clause to filter on things
+        # from other tables.
+        query = self.query.clone()
+        query.__class__ = QueryTree
+        query.bump_prefix()
+        query.extra = {}
+        query.select = []
+        query.add_fields([query.model._meta.pk.name])
+        must_pre_select = count > 1 and not self.connection.features.update_can_self_select
+
+        # Now we adjust the current query: reset the where clause and get rid
+        # of all the tables we don't need (since they're in the sub-select).
+        self.query.where = self.query.where_class()
+        if self.query.related_updates or must_pre_select:
+            # Either we're using the idents in multiple update queries (so
+            # don't want them to change), or the db backend doesn't support
+            # selecting from the updating table (e.g. MySQL).
+            idents = []
+            for rows in query.get_compiler(self.using).execute_sql(MULTI):
+                idents.extend([r[0] for r in rows])
+            self.query.add_filter(('pk__in', idents))
+            self.query.related_ids = idents
+        else:
+            # The fast path. Filters and updates in one query.
+            self.query.add_filter(('pk__in', query))
+        for alias in self.query.tables[1:]:
+            self.query.alias_refcount[alias] = 0
+
+class QTDateCompiler(QueryTreeSQLCompiler):
+    def results_iter(self):
+        """
+        Returns an iterator over the results from executing this query.
+        """
+        resolve_columns = hasattr(self, 'resolve_columns')
+        if resolve_columns:
+            from django.db.models.fields import DateTimeField
+            fields = [DateTimeField()]
+        else:
+            from django.db.backends.util import typecast_timestamp
+            needs_string_cast = self.connection.features.needs_datetime_string_cast
+
+        offset = len(self.query.extra_select)
+        for rows in self.execute_sql(MULTI):
+            for row in rows:
+                date = row[offset]
+                if resolve_columns:
+                    date = self.resolve_columns(row, fields)[offset]
+                elif needs_string_cast:
+                    date = typecast_timestamp(str(date))
+                yield date

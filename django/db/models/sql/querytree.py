@@ -600,6 +600,7 @@ class QueryTree(object):
         having_ops_values = copy.deepcopy(self.having_ops.values())
         self.having = self.filter_ops_to_where(having_ops_values)
         self.having.relabel_aliases(change_map)
+        import ipdb; ipdb.set_trace()
         if not self.select:
             self.select = [(self.base_rel.rel_ident, f.column) for f in self.get_meta().fields]
         self.select_cols = []
@@ -617,8 +618,7 @@ class QueryTree(object):
                 subq_base_rel = child.to_rel
                 cond, joins = self.extract_single_subq(subq_base_rel)
                 # collect all the relations in the subtree
-                subq = self.__class__()
-                subq.prepare_new(subq_base_rel.model)
+                subq = self.__class__(subq_base_rel.model)
                 subq.base_rel = subq_base_rel
                 if cond[-1] != 'NOT':
                     cond.append('NOT')
@@ -809,7 +809,7 @@ class QueryTree(object):
         Returns the query as an SQL string and the parameters that will be
         subsituted into the query.
         """
-        return c.get_compiler(DEFAULT_DB_ALIAS).as_sql()
+        return self.get_compiler(DEFAULT_DB_ALIAS).as_sql()
     
     def add_ordering(self, *ordering):
         """

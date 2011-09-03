@@ -16,6 +16,108 @@ FOLLOW_REVERSE = 'FOLLOW_REVERSE'
 FOLLOW_FORWARD = 'FOLLOW_FORWARD'
 SUBQ_NOT_EXISTS = 'NOT EXISTS'
 
+"""
+The overall plan:
+  - Operations on qs (.filter(), .order_by(), .annotate()...) work
+    on query representation (in our case named QueryTree). It has
+    the information which relations are needed by the query, the
+    representation of filters (in reverse polish notation), the
+    aggregates and things like that. There however is no handling
+    of subqueries, left vs inner joins etc. at this level.
+
+  - When the query is executed three things happen:
+    1. Some pre-execution setup is done: relations needed because
+       of select_related, .values(), order_by's and so on are added to
+       the query representation. All needed selects are calculated, all
+       needed relations are there, as well as group bys etc.
+    2. The query is transformed to a format where filter ops are split
+       to having and where trees (WhereNodes), things that need subqueries
+       are extracted and left vs inner joins are resolved for the rest of
+       joins. In general this is done on best-effort principle, as total
+       solutions are either really complex, or even theoretically impossible
+       (assuming P != NP...)
+    3. The query is transformed to SQL. This should be easy now that
+       everything complex should be done.
+
+  - Possible problems: the query execution can be somewhat costly, as there
+    is some non-trivial work to do. This is mostly a problem in cases where
+    you first construct a complex queryset, and then execute it repeatedly
+    (maybe with a different .filter(pk=x) each time). Previously the execution
+    wasn't that expensive, but now we need to turn the reverse_polish 
+    notations to trees of WhereNodes(), do subquery extraction, and do join 
+    promotion. On the other hand, if there was a complex filter operation in 
+    the query, the one copy.deepcopy(where) could be more expensive than the 
+    setup...
+
+    This needs bechmarking, which can't be done before we have the work done.
+    My gut feeling is that the pre-execution setup will be about as expensive 
+    as one clone was before. The possible exception to this is the join 
+    promotion logic. But this can be done at the end of each operation if need
+    be, so no worries there!
+ 
+
+Random notes:
+  - Join promotion isn't an easy problem to solve competely.
+    The question is essentially this - If all operations referencing
+    the relation we are considering for promotion evaluate to False, will
+    there be an assignment to other operations such that the whole
+    condition evaluates to True. That is the satisfiability problem (SAT), 
+    and it is a NP-complete problem. So, better to try to spot some easy
+    cases where inner join is the right thing to do, and use left join
+    for the rest. I suspect we will get >99% coverage by that approach.
+    But it is important that we err on the side of caution and use left
+    joins if we can't prove the SAT. 
+    - TODO: how do we find out if the problem is too hard to solve 
+      completely? Some ideas: 
+         - More than N variabes referenced -> too hard
+         - Just the amount of operations -> A large or list is easy to
+           solve, there is just one varibale => not this.
+         - Try with a limit on maximum effort -> if no solution, too hard
+         - Some heuristic that finds the common cases. Must not ever err on
+           the inner join side.
+   
+    Factors in play when doing join promotion:
+      - Fetching fields (or models) through nullable joins -> left join
+      - filtering __isnull=True through joins
+         - if the join and the field are non-nullable, this is an antitautology
+         - otherwise use left join, except if can prove inner join is safe
+      - ORed predicates lead to the need of left joins, except if can prove
+        that inner join is safe.
+      - Can be true heuristic:
+        start from the smallest items the relation we are interested in (r1)
+        appears, check if that item can be true. If so, continue upwards the
+        tree and check if the tree as whole can be true. Single-pass algorithm,
+        but does not take into account dependencies between nodes:
+        (r1 | a) and (r1 | not a) => (r1 | a) can be true and so can be 
+        (r1 | not a). However, not at the same time. We get the false
+        result of "can be true", even if the above is not satisfiable if r1 is
+        false. However, this results in left join of r1 even though inner join
+        would be enough. No matter!
+ 
+    The situation isn't bad at all, as in most cases it is very easy to
+    say that we need an inner join. All top-level operations can be considered
+    separately (because all .filter() calls are ANDed together). So to have
+    an actual problem, one would need a complex single .filter() call - and
+    those are very rare.
+
+The hard problems:
+  - Join promotion
+  - Subquery extraction (what to extract, how to extract and how to execute
+    the extracted stuff)
+  - Both of the above need correct solutions, not something that seems to 
+    mostly work!
+  - Keeping it all relatively understandable and logical.
+
+Stuff working already correctly:
+  - Joins, Relations.
+  - Reverse Polish notation.
+
+To consider next:
+  - Every queryset operation goes: 
+    c = self.clone(); c.start_op(); do stuff; c.end_op()
+    if inplace qs, self.clone() returns self.
+"""
+
 def op_sequence_generator():
     """
     Django differentiates qs.filter(op1).filter(op2) from qs.filter(op1, op2)
@@ -600,7 +702,6 @@ class QueryTree(object):
         having_ops_values = copy.deepcopy(self.having_ops.values())
         self.having = self.filter_ops_to_where(having_ops_values)
         self.having.relabel_aliases(change_map)
-        import ipdb; ipdb.set_trace()
         if not self.select:
             self.select = [(self.base_rel.rel_ident, f.column) for f in self.get_meta().fields]
         self.select_cols = []

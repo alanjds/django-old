@@ -846,6 +846,36 @@ class QuerySet(object):
     ###################
 
     def _clone(self, klass=None, setup=False, **kwargs):
+        """
+        This methods clones self and returns a new instance. Also:
+           - changes the class of the clone to klass
+           - If setup it True, and the clone has attribute _setup_query
+             then runs _setup_query on the clone
+           - updates the dict of the clone with kwargs
+        Refactor:
+           - this method clones self and returns the clone.
+           - Another method for changing the klass and running setup
+             change_class(setup=True)
+           - The dict update should be done by the caller. Preferrably
+             by using conventional clone.attr = value way.
+        This would be purely cleanup. I object to a method called _clone
+        that does a lot of stuff as a side effect. This is even worse in
+        sql/query.py which does all kind of state reset, effectively clone
+        has a side effect of starting a new operation.
+
+        The downside: there will be more lines of code, as 
+            clone(klass=NewClass, setup=True, {'foovar': 'bar'}
+        will need to be replaced by:
+            c = self.clone()
+            c.change_class(NewClass, setup=True)
+            c.foovar = 'bar'
+        Even if the latter is more lines of code, it is much, much more
+        readable.
+
+        Alternative: maybe .start_op(new_class=NewClass, setup=True) without
+        kwargs would be better. This would return a new instance ready to do
+        the started operation... Should work, no?
+        """
         if klass is None:
             klass = self.__class__
         query = self.query.clone()

@@ -7,6 +7,21 @@ from StringIO import StringIO
 from django.db import models
 from django.utils.encoding import smart_unicode
 
+class NaturalKey(object):
+    """
+    Marker class for natural keys. Used so that natural keys can
+    be looked up from the DB as late as possible
+    """
+    def __init__(self, key_values, field, db):
+        self.key_values = key_values
+        self.field = field
+        self.db = db
+
+    def resolve(self):
+        pk =  self.field.rel.to._default_manager.db_manager(self.db).\
+                  get_by_natural_key(*self.key_values).pk
+        return pk
+
 class SerializerDoesNotExist(KeyError):
     """The requested serializer was not found."""
     pass
@@ -159,15 +174,31 @@ class DeserializedObject(object):
         return "<DeserializedObject: %s.%s(pk=%s)>" % (
             self.object._meta.app_label, self.object._meta.object_name, self.object.pk)
 
+    def resolve_natural_keys(self, resolve_m2m):
+        obj = self.object
+        for f in obj._meta.fields:
+            val = getattr(obj, f.attname)
+            if isinstance(val, NaturalKey):
+                setattr(obj, f.attname, val.resolve())
+        if self.m2m_data and resolve_m2m:
+            for object_list in self.m2m_data.values():
+                for pos, obj in enumerate(object_list):
+                    if isinstance(obj, NaturalKey):
+                        object_list[pos] = obj.resolve()
+                
+                
+
     def save(self, save_m2m=True, using=None):
         # Call save on the Model baseclass directly. This bypasses any
         # model-defined save. The save is also forced to be raw.
         # This ensures that the data that is deserialized is literally
         # what came from the file, not post-processed by pre_save/save
         # methods.
+        self.resolve_natural_keys(resolve_m2m=save_m2m)
         models.Model.save_base(self.object, using=using, raw=True)
         if self.m2m_data and save_m2m:
             for accessor_name, object_list in self.m2m_data.items():
+                object_list = [isinstance(obj, NaturalKey) and obj.resolve() or obj for obj in object_list]
                 setattr(self.object, accessor_name, object_list)
 
         # prevent a second (possibly accidental) call to save() from saving

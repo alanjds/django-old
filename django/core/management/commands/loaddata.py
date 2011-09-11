@@ -170,14 +170,18 @@ class Command(BaseCommand):
                                     (format, fixture_name, humanize(fixture_dir)))
                             try:
                                 objects = serializers.deserialize(format, fixture, using=using)
-
                                 with connection.constraint_checks_disabled():
+                                    obj_collector = ObjCollector()
+                                    if settings.DEBUG:
+                                        import ipdb; ipdb.set_trace()
                                     for obj in objects:
                                         objects_in_fixture += 1
                                         if router.allow_syncdb(using, obj.object.__class__):
                                             loaded_objects_in_fixture += 1
                                             models.add(obj.object.__class__)
-                                            obj.save(using=using)
+                                            obj_collector.add(obj, using)
+                                            # obj.save(using=using)
+                                    obj_collector.do_batch(using)
 
                                 # Since we disabled constraint checks, we must manually check for
                                 # any invalid keys that might have been added
@@ -185,6 +189,7 @@ class Command(BaseCommand):
                                 connection.check_constraints(table_names=table_names)
 
                                 loaded_object_count += loaded_objects_in_fixture
+
                                 fixture_object_count += objects_in_fixture
                                 label_found = True
                             except (SystemExit, KeyboardInterrupt):
@@ -253,3 +258,41 @@ class Command(BaseCommand):
         # incorrect results. See Django #7572, MySQL #37735.
         if commit:
             connection.close()
+
+class ObjCollector(object):
+    MAX_BATCH_SIZE = 100
+
+    def __init__(self):
+        self.current_batch = []
+        self.current_model = None
+ 
+    def add(self, obj, using):
+        if obj.object.__class__ != self.current_model:
+            self.do_batch(using)
+            self.current_model = obj.object.__class__
+        self.current_batch.append(obj)
+
+    def do_batch(self, using):
+        if not self.current_batch:
+            return
+        model = self.current_model
+        base_qs = model.objects.values_list('pk', flat=True).using(using)
+        if settings.DEBUG:
+            import ipdb; ipdb.set_trace()
+        for i in range(0, len(self.current_batch), self.MAX_BATCH_SIZE):
+            objs = self.current_batch[i:i+self.MAX_BATCH_SIZE]
+            bulk_batch = []
+            qs = base_qs.filter(pk__in=[obj.object.pk for obj in objs])
+            pk_set = set(qs)
+            for obj in objs:
+                if obj.object.pk in pk_set:
+                    obj.save(using=using, force_update=True)
+                else:
+                    # inherited models can't be bulk created
+                    #if (obj.object._meta.parents):
+                    obj.save(using=using, force_insert=True)
+                    #else:
+                    #bulk_batch.append(obj.object)
+            if bulk_batch:
+                model.objects.using(using).bulk_create(bulk_batch)
+        self.current_batch = []

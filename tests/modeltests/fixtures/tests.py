@@ -115,16 +115,18 @@ class FixtureLoadingTests(TestCase):
         management.call_command('loaddata', 'fixture8.json', verbosity=0, commit=False)
         self.assertQuerysetEqual(Visa.objects.all(), [
             '<Visa: Django Reinhardt Can add user, Can change user, Can delete user>',
-            '<Visa: Stephane Grappelli Can add user>',
-            '<Visa: Prince >'
+            '<Visa: Prince >',
+            '<Visa: Stephane Grappelli Can add user>'
         ])
 
         # Load fixture 9, XML file with dynamic Permission fields. Testing ManyToMany.
+        from django.conf import settings
+        settings.DEBUG = True
         management.call_command('loaddata', 'fixture9.xml', verbosity=0, commit=False)
         self.assertQuerysetEqual(Visa.objects.all(), [
+            '<Visa: Artist formerly known as "Prince" Can change user>',
             '<Visa: Django Reinhardt Can add user, Can change user, Can delete user>',
-            '<Visa: Stephane Grappelli Can add user, Can delete user>',
-            '<Visa: Artist formerly known as "Prince" Can change user>'
+            '<Visa: Stephane Grappelli Can add user, Can delete user>'
         ])
 
         self.assertQuerysetEqual(Book.objects.all(), [

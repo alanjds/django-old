@@ -87,6 +87,9 @@ class Visa(models.Model):
         return '%s %s' % (self.person.name,
                           ', '.join(p.name for p in self.permissions.all()))
 
+    class Meta:
+        ordering = ('person', )
+
 class Book(models.Model):
     name = models.CharField(max_length=100)
     authors = models.ManyToManyField(Person)

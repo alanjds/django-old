@@ -13,7 +13,7 @@ from django.core import serializers
 from django.core.management.base import BaseCommand
 from django.core.management.color import no_style
 from django.db import connections, router, transaction, DEFAULT_DB_ALIAS
-from django.db.models import get_apps
+from django.db.models import get_apps, signals
 from django.utils.itercompat import product
 
 try:
@@ -172,8 +172,6 @@ class Command(BaseCommand):
                                 objects = serializers.deserialize(format, fixture, using=using)
                                 with connection.constraint_checks_disabled():
                                     obj_collector = ObjCollector()
-                                    if settings.DEBUG:
-                                        import ipdb; ipdb.set_trace()
                                     for obj in objects:
                                         objects_in_fixture += 1
                                         if router.allow_syncdb(using, obj.object.__class__):
@@ -258,6 +256,12 @@ class Command(BaseCommand):
         # incorrect results. See Django #7572, MySQL #37735.
         if commit:
             connection.close()
+update_count = 0
+select_count = 0
+insert_count = 0
+batch_insert_count = 0
+batch_count = 0
+total_count = 0
 
 class ObjCollector(object):
     MAX_BATCH_SIZE = 100
@@ -267,18 +271,24 @@ class ObjCollector(object):
         self.current_model = None
  
     def add(self, obj, using):
-        if obj.object.__class__ != self.current_model:
+        global update_count, select_count, insert_count, batch_insert_count,\
+               batch_count, total_count
+        total_count += 1
+        if obj.object.__class__ != self.current_model or obj.has_natural_keys:
             self.do_batch(using)
             self.current_model = obj.object.__class__
         self.current_batch.append(obj)
+        if total_count % 10 == 0 and batch_count > 0:
+            print 'total_objects: ', total_count, "average batch size", batch_insert_count / (batch_count * 1.0), "selects done", select_count, "updates done", update_count, "raw inserts done", insert_count, "batcc_inserts done", batch_insert_count
 
     def do_batch(self, using):
+        global update_count, select_count, insert_count, batch_insert_count,\
+               batch_count, total_count
         if not self.current_batch:
             return
         model = self.current_model
-        base_qs = model.objects.values_list('pk', flat=True).using(using)
-        if settings.DEBUG:
-            import ipdb; ipdb.set_trace()
+        select_count += 1
+        base_qs = model._default_manager.values_list('pk', flat=True).using(using)
         for i in range(0, len(self.current_batch), self.MAX_BATCH_SIZE):
             objs = self.current_batch[i:i+self.MAX_BATCH_SIZE]
             bulk_batch = []
@@ -286,13 +296,29 @@ class ObjCollector(object):
             pk_set = set(qs)
             for obj in objs:
                 if obj.object.pk in pk_set:
+                    update_count += 1
                     obj.save(using=using, force_update=True)
                 else:
                     # inherited models can't be bulk created
-                    #if (obj.object._meta.parents):
-                    obj.save(using=using, force_insert=True)
-                    #else:
-                    #bulk_batch.append(obj.object)
+                    if (obj.object._meta.parents):
+                        insert_count += 1
+                        obj.save(using=using, force_insert=True)
+                    else:
+                        obj.resolve_natural_keys(resolve_m2m=True)
+                        batch_insert_count += 1
+                        bulk_batch.append(obj)
             if bulk_batch:
-                model.objects.using(using).bulk_create(bulk_batch)
+                batch_count += 1
+                bulk_objs = [obj.object for obj in bulk_batch]
+                for obj in bulk_objs:
+                    signals.pre_save.send(sender=obj.__class__, 
+                                          instance=obj, raw=True, using=using)
+                model._default_manager.using(using).bulk_create(bulk_objs)
+                for obj in bulk_batch:
+                    signals.post_save.send(sender=obj.object.__class__, 
+                                          instance=obj.object, raw=True, 
+                                          using=using, created=True)
+                    obj.save_m2m(using)
+                # TODO - bulk-resolve natural m2m keys,
+                #      - bulk save m2m
         self.current_batch = []

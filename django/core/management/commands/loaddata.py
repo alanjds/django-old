@@ -264,7 +264,7 @@ batch_count = 0
 total_count = 0
 
 class ObjCollector(object):
-    MAX_BATCH_SIZE = 100
+    MAX_BATCH_SIZE = 500
 
     def __init__(self):
         self.current_batch = []
@@ -287,11 +287,11 @@ class ObjCollector(object):
         if not self.current_batch:
             return
         model = self.current_model
-        select_count += 1
         base_qs = model._default_manager.values_list('pk', flat=True).using(using)
         for i in range(0, len(self.current_batch), self.MAX_BATCH_SIZE):
             objs = self.current_batch[i:i+self.MAX_BATCH_SIZE]
             bulk_batch = []
+            select_count += 1
             qs = base_qs.filter(pk__in=[obj.object.pk for obj in objs])
             pk_set = set(qs)
             for obj in objs:
@@ -322,3 +322,5 @@ class ObjCollector(object):
                 # TODO - bulk-resolve natural m2m keys,
                 #      - bulk save m2m
         self.current_batch = []
+        if batch_count > 0:
+            print 'total_objects: ', total_count, "average batch size", batch_insert_count / (batch_count * 1.0), "selects done", select_count, "updates done", update_count, "raw inserts done", insert_count, "batcc_inserts done", batch_insert_count

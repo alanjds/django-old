@@ -278,8 +278,8 @@ class ObjCollector(object):
             self.do_batch(using)
             self.current_model = obj.object.__class__
         self.current_batch.append(obj)
-        if total_count % 10 == 0 and batch_count > 0:
-            print 'total_objects: ', total_count, "average batch size", batch_insert_count / (batch_count * 1.0), "selects done", select_count, "updates done", update_count, "raw inserts done", insert_count, "batcc_inserts done", batch_insert_count
+        #if total_count % 10 == 0 and batch_count > 0:
+            #print 'total_objects: ', total_count, "average batch size", batch_insert_count / (batch_count * 1.0), "selects done", select_count, "updates done", update_count, "raw inserts done", insert_count, "batcc_inserts done", batch_insert_count
 
     def do_batch(self, using):
         global update_count, select_count, insert_count, batch_insert_count,\
@@ -322,5 +322,5 @@ class ObjCollector(object):
                 # TODO - bulk-resolve natural m2m keys,
                 #      - bulk save m2m
         self.current_batch = []
-        if batch_count > 0:
-            print 'total_objects: ', total_count, "average batch size", batch_insert_count / (batch_count * 1.0), "selects done", select_count, "updates done", update_count, "raw inserts done", insert_count, "batcc_inserts done", batch_insert_count
+        #if batch_count > 0:
+            #print 'total_objects: ', total_count, "average batch size", batch_insert_count / (batch_count * 1.0), "selects done", select_count, "updates done", update_count, "raw inserts done", insert_count, "batcc_inserts done", batch_insert_count

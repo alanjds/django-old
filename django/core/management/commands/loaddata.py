@@ -264,7 +264,7 @@ batch_count = 0
 total_count = 0
 
 class ObjCollector(object):
-    MAX_BATCH_SIZE = 500
+    MAX_BATCH_SIZE = 100
 
     def __init__(self):
         self.current_batch = []

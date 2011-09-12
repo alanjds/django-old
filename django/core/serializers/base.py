@@ -173,25 +173,7 @@ class DeserializedObject(object):
     def __repr__(self):
         return "<DeserializedObject: %s.%s(pk=%s)>" % (
             self.object._meta.app_label, self.object._meta.object_name, self.object.pk)
-
-    def _has_natural_keys(self):
-        """
-        Todo: a better way is to set 'has_natural_keys' in deserializing
-        and just test that. This can be a little bit expensive...
-        """
-        obj = self.object
-        for f in obj._meta.fields:
-            val = getattr(obj, f.attname)
-            if isinstance(val, NaturalKey):
-                return True
-        if self.m2m_data:
-            for object_list in self.m2m_data.values():
-                for pos, obj in enumerate(object_list):
-                    if isinstance(obj, NaturalKey):
-                        return True
-        return False
-    has_natural_keys = property(_has_natural_keys)
-
+    
     def resolve_natural_keys(self, resolve_m2m):
         obj = self.object
         for f in obj._meta.fields:
@@ -220,6 +202,7 @@ class DeserializedObject(object):
         # methods.
         self.resolve_natural_keys(resolve_m2m=save_m2m)
         models.Model.save_base(self.object, using=using, raw=True, 
-                               force_insert=force_insert, force_update=force_update)
+                               force_insert=force_insert, 
+                               force_update=force_update)
         if save_m2m:
             self.save_m2m(using)

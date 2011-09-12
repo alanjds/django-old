@@ -271,56 +271,47 @@ class ObjCollector(object):
         self.current_model = None
  
     def add(self, obj, using):
-        global update_count, select_count, insert_count, batch_insert_count,\
-               batch_count, total_count
-        total_count += 1
-        if obj.object.__class__ != self.current_model or obj.has_natural_keys:
+        # Objects are serialized class at a time, so
+        # when we see an object of a new class, it is time to save the
+        # current batch.
+        if obj.object.__class__ != self.current_model:
             self.do_batch(using)
             self.current_model = obj.object.__class__
         self.current_batch.append(obj)
-        #if total_count % 10 == 0 and batch_count > 0:
-            #print 'total_objects: ', total_count, "average batch size", batch_insert_count / (batch_count * 1.0), "selects done", select_count, "updates done", update_count, "raw inserts done", insert_count, "batcc_inserts done", batch_insert_count
 
     def do_batch(self, using):
-        global update_count, select_count, insert_count, batch_insert_count,\
-               batch_count, total_count
         if not self.current_batch:
             return
         model = self.current_model
-        base_qs = model._default_manager.values_list('pk', flat=True).using(using)
+        qs = model._default_manager.values_list('pk', flat=True).using(using)
         for i in range(0, len(self.current_batch), self.MAX_BATCH_SIZE):
             objs = self.current_batch[i:i+self.MAX_BATCH_SIZE]
-            bulk_batch = []
-            select_count += 1
-            qs = base_qs.filter(pk__in=[obj.object.pk for obj in objs])
-            pk_set = set(qs)
+            existing = set(qs.filter(pk__in=[obj.object.pk for obj in objs]))
+            bulk_create = []
             for obj in objs:
-                if obj.object.pk in pk_set:
-                    update_count += 1
+                if obj.object.pk in existing:
                     obj.save(using=using, force_update=True)
                 else:
                     # inherited models can't be bulk created
-                    if (obj.object._meta.parents):
-                        insert_count += 1
+                    if obj.object._meta.parents:
                         obj.save(using=using, force_insert=True)
                     else:
-                        obj.resolve_natural_keys(resolve_m2m=True)
-                        batch_insert_count += 1
-                        bulk_batch.append(obj)
-            if bulk_batch:
-                batch_count += 1
-                bulk_objs = [obj.object for obj in bulk_batch]
-                for obj in bulk_objs:
-                    signals.pre_save.send(sender=obj.__class__, 
-                                          instance=obj, raw=True, using=using)
-                model._default_manager.using(using).bulk_create(bulk_objs)
-                for obj in bulk_batch:
-                    signals.post_save.send(sender=obj.object.__class__, 
-                                          instance=obj.object, raw=True, 
-                                          using=using, created=True)
-                    obj.save_m2m(using)
-                # TODO - bulk-resolve natural m2m keys,
-                #      - bulk save m2m
+                        bulk_create.append(obj)
+            if not bulk_create:
+                continue
+            for obj in bulk_create:
+                obj.resolve_natural_keys(resolve_m2m=True)
+                signals.pre_save.send(sender=obj.object.__class__, 
+                                      instance=obj.object, raw=True, 
+                                      using=using)
+            model._default_manager.using(using).bulk_create(
+                [obj.object for obj in bulk_create]
+            )
+            for obj in bulk_create:
+                signals.post_save.send(sender=obj.object.__class__, 
+                                  instance=obj.object, raw=True, 
+                                  using=using, created=True)
+                obj.save_m2m(using)
+            # TODO - bulk-resolve natural m2m keys,
+            #      - bulk save m2m
         self.current_batch = []
-        #if batch_count > 0:
-            #print 'total_objects: ', total_count, "average batch size", batch_insert_count / (batch_count * 1.0), "selects done", select_count, "updates done", update_count, "raw inserts done", insert_count, "batcc_inserts done", batch_insert_count

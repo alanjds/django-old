@@ -187,7 +187,6 @@ class Command(BaseCommand):
                                 connection.check_constraints(table_names=table_names)
 
                                 loaded_object_count += loaded_objects_in_fixture
-
                                 fixture_object_count += objects_in_fixture
                                 label_found = True
                             except (SystemExit, KeyboardInterrupt):
@@ -256,12 +255,7 @@ class Command(BaseCommand):
         # incorrect results. See Django #7572, MySQL #37735.
         if commit:
             connection.close()
-update_count = 0
-select_count = 0
-insert_count = 0
-batch_insert_count = 0
-batch_count = 0
-total_count = 0
+
 
 class ObjCollector(object):
     MAX_BATCH_SIZE = 100
@@ -269,11 +263,10 @@ class ObjCollector(object):
     def __init__(self):
         self.current_batch = []
         self.current_model = None
- 
+
     def add(self, obj, using):
-        # Objects are serialized class at a time, so
-        # when we see an object of a new class, it is time to save the
-        # current batch.
+        # Objects are serialized class at a time, so when a new class is
+        # seen, it is time to save the current batch.
         if obj.object.__class__ != self.current_model:
             self.do_batch(using)
             self.current_model = obj.object.__class__

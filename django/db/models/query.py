@@ -1642,11 +1642,18 @@ def _prefetch_one_level(instances, relmanager, attname):
     if additional_prf:
         rel_qs = rel_qs.prefetch_related(None)
     all_related_objects = list(rel_qs)
+
+    rel_obj_cache = {}
+    for rel_obj in all_related_objects:
+        rel_attr_val = getattr(rel_obj, rel_obj_attr)
+        if rel_attr_val not in rel_obj_cache:
+            rel_obj_cache[rel_attr_val] = []
+        rel_obj_cache[rel_attr_val].append(rel_obj)
+
     for obj in instances:
         qs = getattr(obj, attname).all()
         instance_attr_val = getattr(obj, instance_attr)
-        qs._result_cache = [rel_obj for rel_obj in all_related_objects
-                            if getattr(rel_obj, rel_obj_attr) == instance_attr_val]
+        qs._result_cache = rel_obj_cache.get(instance_attr_val, [])
         # We don't want the individual qs doing prefetch_related now, since we
         # have merged this into the current work.
         qs._prefetch_done = True

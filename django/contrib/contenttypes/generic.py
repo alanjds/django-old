@@ -271,18 +271,21 @@ def create_generic_related_manager(superclass):
             db = self._db or router.db_for_read(self.model, instance=self.instance)
             return super(GenericRelatedObjectManager, self).get_query_set().using(db).filter(**self.core_filters)
 
-        def get_prefetch_query_set(self, instances):
+        def get_prefetch_query_set(self, instances, custom_qs=None):
             if not instances:
                 return self.model._default_manager.none()
-
-            db = self._db or router.db_for_read(self.model, instance=instances[0])
             query = {
                 '%s__pk' % self.content_type_field_name: self.content_type.id,
                 '%s__in' % self.object_id_field_name:
                     [obj._get_pk_val() for obj in instances]
-                }
-            qs = super(GenericRelatedObjectManager, self).get_query_set().using(db).filter(**query)
-            return (qs, self.object_id_field_name, 'pk')
+            }
+            if not custom_qs:
+                db = self._db or router.db_for_read(self.model, instance=instances[0])
+                qs = super(GenericRelatedObjectManager, self).get_query_set()\
+                         .using(db).filter(**query)
+            else:
+                qs = custom_qs.filter(**query)
+            return (list(qs), self.object_id_field_name, 'pk')
 
         def all(self):
             try:

@@ -441,14 +441,14 @@ class ForeignRelatedObjectsDescriptor(object):
                 by prefetch_related functionality.
                 """
                 query = {'%s__%s__in' % (rel_field.name, attname):
-                             [getattr(obj, attname) for obj in instances]}
+                                 [getattr(obj, attname) for obj in instances]}
                 if custom_qs:
-                    qs = custom_qs.filter(**query)
+                    objs = list(custom_qs.filter(**query))
                 else: 
                     db = self._db or router.db_for_read(self.model)
-                    qs = super(RelatedManager, self).get_query_set().\
-                             using(db).filter(**query)
-                return (qs, rel_field.get_attname(), attname)
+                    objs = list(super(RelatedManager, self).get_query_set().
+                                    using(db).filter(**query))
+                return (objs, rel_field.get_attname(), attname)
 
             def all(self):
                 try:
@@ -525,7 +525,7 @@ def create_many_related_manager(superclass, rel):
             db = self._db or router.db_for_read(self.instance.__class__, instance=self.instance)
             return super(ManyRelatedManager, self).get_query_set().using(db)._next_is_sticky().filter(**(self.core_filters))
 
-        def get_prefetch_query_set(self, instances):
+        def get_prefetch_query_set(self, instances, custom_qs=None):
             """
             Returns a tuple:
             (queryset of instances of self.model that are related to passed in instances
@@ -536,7 +536,10 @@ def create_many_related_manager(superclass, rel):
             db = self._db or router.db_for_read(self.model)
             query = {'%s__pk__in' % self.query_field_name:
                          [obj._get_pk_val() for obj in instances]}
-            qs = super(ManyRelatedManager, self).get_query_set().using(db)._next_is_sticky().filter(**query)
+            if custom_qs:
+                qs = custom_qs.filter(**query)
+            else:
+                qs = super(ManyRelatedManager, self).get_query_set().using(db)._next_is_sticky().filter(**query)
 
             # M2M: need to annotate the query in order to get the primary model
             # that the secondary model was actually related to.
@@ -554,7 +557,7 @@ def create_many_related_manager(superclass, rel):
             qs = qs.extra(select={'_prefetch_related_val':
                                       '%s.%s' % (qn(join_table), qn(source_col))})
             select_attname = fk.rel.get_related_field().get_attname()
-            return (qs, '_prefetch_related_val', select_attname)
+            return (list(qs), '_prefetch_related_val', select_attname)
 
         def all(self):
             try:

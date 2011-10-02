@@ -1595,7 +1595,7 @@ def prefetch_related_objects(result_cache, fields):
             break
 
         for obj in obj_list:
-            if not hasattr(test_obj, '_prefetched_objects_cache'):
+            if not hasattr(obj, '_prefetched_objects_cache'):
                 obj._prefetched_objects_cache = {}
 
         try:
@@ -1613,11 +1613,11 @@ def prefetch_related_objects(result_cache, fields):
         else:
             # Assume we've got some singly related object. We replace
             # the current list of parent objects with that list.
-            obj_list = [getattr(obj, attr) for obj in obj_list]
+            obj_list = [getattr(obj, cur_lookup) for obj in obj_list]
             # circular import...
-            from django.db.model import Model
+            from django.db.models import Model
             if not isinstance(obj_list[0], Model):
-                 raise AttributeError('Invalid lookup %s for prefetch_related' % prev_lookup)
+                 raise ValueError('Invalid lookup %s for prefetch_related' % prev_lookup)
         done_objs[r_obj.lookup_path] = obj_list
 
 

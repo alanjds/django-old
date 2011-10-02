@@ -1568,17 +1568,17 @@ def prefetch_related_objects(result_cache, fields):
             continue
         done_lookups.add(r_obj.lookup_path)
         lookup, _, _ = r_obj.lookup.rpartition(LOOKUP_SEP)
-        needed_r_objs = [r_obj]
+        needed_r_objs = [(r_obj, True)]
         while lookup and lookup not in done_lookups:
             done_lookups.add(lookup)
-            needed_r_objs.append(R(lookup))
+            needed_r_objs.append((R(lookup), False))
             lookup, _, _ = lookup.rpartition(LOOKUP_SEP)
         needed_r_objs.reverse()
         ordered_r_objs.extend(needed_r_objs)
     
     # the upmost level has no lookup path, hence the ''
     done_objs = {'': result_cache}
-    for r_obj in ordered_r_objs:
+    for (r_obj, is_final) in ordered_r_objs:
         prev_lookup, _, cur_lookup = r_obj.lookup.rpartition(LOOKUP_SEP)
         obj_list = done_objs[prev_lookup]
         if len(obj_list) == 0:
@@ -1606,18 +1606,22 @@ def prefetch_related_objects(result_cache, fields):
                 "parameter to prefetch_related()" %
                 (cur_lookup, obj_list[0].__class__.__name__, prev_lookup))
 
-        can_prefetch = hasattr(rel_obj, 'get_prefetch_query_set')
-        if can_prefetch:
+        if hasattr(rel_obj, 'get_prefetch_query_set'):
             obj_list = _prefetch_one_level(obj_list, rel_obj, r_obj)
             done_objs[r_obj.lookup_path] = obj_list
         else:
+            if is_final:
+                 raise ValueError(
+                     'Invalid lookup %s for prefetch_related.'
+                     'The final part %s leads does not support prefetching' %
+                     (prev_lookup, cur_lookup))
             # Assume we've got some singly related object. We replace
             # the current list of parent objects with that list.
             obj_list = [getattr(obj, cur_lookup) for obj in obj_list]
             # circular import...
             from django.db.models import Model
             if not isinstance(obj_list[0], Model):
-                 raise ValueError('Invalid lookup %s for prefetch_related' % prev_lookup)
+                 raise ValueError('Invalid lookup %s for prefetch_related. Lookup leads to a field %s that is not a related field' % (prev_lookup, cur_lookup))
         done_objs[r_obj.lookup_path] = obj_list
 
 
@@ -1655,6 +1659,7 @@ def _prefetch_one_level(instances, relmanager, r_obj):
         if not r_obj.to_attr:
             qs = getattr(obj, r_obj.attname).all()
             qs._result_cache = results
+            qs._prefetch_done = True
             obj._prefetched_objects_cache[r_obj.attname] = qs
         else:
             setattr(obj, r_obj.to_attr, results)

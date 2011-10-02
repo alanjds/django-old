@@ -1,5 +1,6 @@
 from django.utils.encoding import smart_unicode
 from django.db.models.fields import BLANK_CHOICE_DASH
+from django.db.models.sql.constants import LOOKUP_SEP
 
 class BoundRelatedObject(object):
     def __init__(self, related_object, field_mapping, original):
@@ -67,3 +68,29 @@ class RelatedObject(object):
 
     def get_cache_name(self):
         return "_%s_cache" % self.get_accessor_name()
+
+# Not knowing a better place for this, I just planted R here.
+# Feel free to move this to a better place or remove this comment.
+class R(object):
+    """
+    A class used for passing options to .prefetch_related.
+    """
+    def __init__(self, lookup, to_attr=None, qs=None):
+        self.lookup = lookup
+        self.to_attr = to_attr or ''
+        self.qs = qs
+
+    def __unicode__(self):
+        return "lookup: %s, to_attr: %s, qs: %s" % (self.lookup, self.to_attr, self.qs)
+
+    def __repr__(self):
+        return '<%s: %s>' % (self.__class__.__name__, unicode(self))
+
+    def _lookup_path(self):
+        lookup, sep, cur_part = self.lookup.rpartition(LOOKUP_SEP)
+        return lookup + sep + self.to_attr or cur_part
+    lookup_path = property(_lookup_path)
+
+    def _attname(self):
+        return self.lookup.rpartition(LOOKUP_SEP)[2]
+    attname = property(_attname)

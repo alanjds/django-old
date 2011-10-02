@@ -4,6 +4,7 @@ from django.db import connection
 from django.db.models.loading import get_apps, get_app, get_models, get_model, register_models
 from django.db.models.query import Q
 from django.db.models.expressions import F
+from django.db.models.related import R
 from django.db.models.manager import Manager
 from django.db.models.base import Model
 from django.db.models.aggregates import *

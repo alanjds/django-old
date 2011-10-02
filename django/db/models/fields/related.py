@@ -435,15 +435,19 @@ class ForeignRelatedObjectsDescriptor(object):
                 db = self._db or router.db_for_read(self.model, instance=self.instance)
                 return super(RelatedManager, self).get_query_set().using(db).filter(**(self.core_filters))
 
-            def get_prefetch_query_set(self, instances):
+            def get_prefetch_query_set(self, instances, custom_qs=None):
                 """
                 Return a queryset that does the bulk lookup needed
                 by prefetch_related functionality.
                 """
-                db = self._db or router.db_for_read(self.model)
                 query = {'%s__%s__in' % (rel_field.name, attname):
                              [getattr(obj, attname) for obj in instances]}
-                qs = super(RelatedManager, self).get_query_set().using(db).filter(**query)
+                if custom_qs:
+                    qs = custom_qs.filter(**query)
+                else: 
+                    db = self._db or router.db_for_read(self.model)
+                    qs = super(RelatedManager, self).get_query_set().\
+                             using(db).filter(**query)
                 return (qs, rel_field.get_attname(), attname)
 
             def all(self):

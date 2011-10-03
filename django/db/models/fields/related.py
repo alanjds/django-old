@@ -443,12 +443,12 @@ class ForeignRelatedObjectsDescriptor(object):
                 query = {'%s__%s__in' % (rel_field.name, attname):
                                  [getattr(obj, attname) for obj in instances]}
                 if custom_qs:
-                    objs = list(custom_qs.filter(**query))
+                    objs = custom_qs.filter(**query)
                 else: 
                     db = self._db or router.db_for_read(self.model)
-                    objs = list(super(RelatedManager, self).get_query_set().
-                                    using(db).filter(**query))
-                return (objs, rel_field.get_attname(), attname)
+                    qs = super(RelatedManager, self).get_query_set().\
+                                    using(db).filter(**query)
+                return (qs, rel_field.get_attname(), attname)
 
             def all(self):
                 try:
@@ -557,7 +557,7 @@ def create_many_related_manager(superclass, rel):
             qs = qs.extra(select={'_prefetch_related_val':
                                       '%s.%s' % (qn(join_table), qn(source_col))})
             select_attname = fk.rel.get_related_field().get_attname()
-            return (list(qs), '_prefetch_related_val', select_attname)
+            return (qs, '_prefetch_related_val', select_attname)
 
         def all(self):
             try:

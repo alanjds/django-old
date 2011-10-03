@@ -285,7 +285,7 @@ def create_generic_related_manager(superclass):
                          .using(db).filter(**query)
             else:
                 qs = custom_qs.filter(**query)
-            return (list(qs), self.object_id_field_name, 'pk')
+            return (qs, self.object_id_field_name, 'pk')
 
         def all(self):
             try:

@@ -1540,6 +1540,33 @@ def insert_query(model, objs, fields, return_id=False, raw=False, using=None):
     query.insert_values(fields, objs, raw=raw)
     return query.get_compiler(using=using).execute_sql(return_id)
 
+def convert_prefetch(fields, done_lookups, prefix=None):
+    prefix = prefix and prefix + LOOKUP_SEP or ''
+    # Convert the fields, which can have R and string lookups mixed, into a
+    # consistent format. After converting fields will be R objects.
+    converted = [isinstance(f, R) and f or R(f) for f in fields]
+    if prefix:
+       [setattr(r, 'lookup', prefix + r.lookup) for r in converted]   
+
+    # We do the related object travelsal in two steps.
+    # First convert the above converted list into having all necessary
+    # steps needed in the path, that is
+    # [R('foo__bar__baz'), R('foo')] 
+    # -> [R('foo'), R('foo__bar'), R('foo__bar__baz')]
+    ordered_r_objs = []
+    for r_obj in converted:
+        if r_obj.lookup_path in done_lookups:
+            continue
+        done_lookups.add(r_obj.lookup_path)
+        lookup, _, _ = (r_obj.lookup).rpartition(LOOKUP_SEP)
+        needed_r_objs = [(r_obj, True)]
+        while lookup and lookup not in done_lookups:
+            done_lookups.add(lookup)
+            needed_r_objs.append((R(lookup), False))
+            lookup, _, _ = lookup.rpartition(LOOKUP_SEP)
+        needed_r_objs.reverse()
+        ordered_r_objs.extend(needed_r_objs)
+    return ordered_r_objs
 
 def prefetch_related_objects(result_cache, fields):
     """
@@ -1552,29 +1579,8 @@ def prefetch_related_objects(result_cache, fields):
 
     model = result_cache[0].__class__
 
-    # Convert the fields, which can have R and string lookups mixed, into a
-    # consistent format. After converting fields will be R objects.
-    converted = [isinstance(f, R) and f or R(f) for f in fields]
-
-    # We do the related object travelsal in two steps.
-    # First convert the above converted list into having all necessary
-    # steps needed in the path, that is
-    # [R('foo__bar__baz'), R('foo')] 
-    # -> [R('foo'), R('foo__bar'), R('foo__bar__baz')]
-    ordered_r_objs = []
     done_lookups = set()
-    for r_obj in converted:
-        if r_obj.lookup_path in done_lookups:
-            continue
-        done_lookups.add(r_obj.lookup_path)
-        lookup, _, _ = r_obj.lookup.rpartition(LOOKUP_SEP)
-        needed_r_objs = [(r_obj, True)]
-        while lookup and lookup not in done_lookups:
-            done_lookups.add(lookup)
-            needed_r_objs.append((R(lookup), False))
-            lookup, _, _ = lookup.rpartition(LOOKUP_SEP)
-        needed_r_objs.reverse()
-        ordered_r_objs.extend(needed_r_objs)
+    ordered_r_objs = convert_prefetch(fields, done_lookups)
     
     # the upmost level has no lookup path, hence the ''
     done_objs = {'': result_cache}
@@ -1607,7 +1613,9 @@ def prefetch_related_objects(result_cache, fields):
                 (cur_lookup, obj_list[0].__class__.__name__, prev_lookup))
 
         if hasattr(rel_obj, 'get_prefetch_query_set'):
-            obj_list = _prefetch_one_level(obj_list, rel_obj, r_obj)
+            obj_list, additional_prf = _prefetch_one_level(obj_list, rel_obj, r_obj)
+            ordered_r_objs.extend(
+                convert_prefetch(additional_prf, done_lookups, prefix=r_obj.lookup_path))
             done_objs[r_obj.lookup_path] = obj_list
         else:
             if is_final:
@@ -1640,10 +1648,8 @@ def _prefetch_one_level(instances, relmanager, r_obj):
     # prefetch_related fields to the QuerySet we just got back. We don't want to
     # trigger the prefetch_related functionality by evaluating the query.
     # Rather, we need to merge in the prefetch_related fields.
-    # Why? :)
-    # additional_prf = list(getattr(rel_qs, '_prefetch_related', []))
-    # if additional_prf:
-    #     rel_qs = rel_qs.prefetch_related(None)
+    additional_prf = rel_qs._prefetch_related
+    rel_qs._prefetch_done = True
     all_related_objects = list(rel_qs)
 
     rel_obj_cache = {}
@@ -1663,4 +1669,4 @@ def _prefetch_one_level(instances, relmanager, r_obj):
             obj._prefetched_objects_cache[r_obj.attname] = qs
         else:
             setattr(obj, r_obj.to_attr, results)
-    return all_related_objects
+    return all_related_objects, additional_prf

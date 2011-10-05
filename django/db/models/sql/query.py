@@ -517,8 +517,9 @@ class Query(object):
             w = self.where_class()
 
         self.where = self.where_class([self.where, w], connector)
-        # the root node's connectors must always be AND
-        if connector == OR:
+        self.where.prune_tree(recurse=True)
+        # the root node's connector must always be AND
+        if self.where.connector == OR:
             self.where = self.where_class([self.where])
 
         # Selection columns and extra extensions are those provided by 'rhs'.
@@ -1259,10 +1260,10 @@ class Query(object):
             self.promote_unused_aliases(refcounts_before, self.used_aliases)
         if having_subtree:
             self.having = self.having.parent
-            self.having.prune_unused_childs()
+            self.having.prune_tree()
         if where_subtree:
             self.where = self.where.parent
-            self.where.prune_unused_childs()
+            self.where.prune_tree()
 
     def setup_joins(self, names, opts, alias, dupe_multis, allow_many=True,
             allow_explicit_fk=False, can_reuse=None, negate=False,

@@ -69,7 +69,7 @@ class Node(object):
         return obj
         
     def __repr__(self):
-        return self.as_tree
+        return self.as_subtree
 
     def __str__(self):
         if self.negated:
@@ -78,27 +78,25 @@ class Node(object):
         return '(%s: %s)' % (self.connector, ', '.join([str(c) for c in
                 self.children]))
 
-    def _as_tree(self, indent=-1):
-        """
-        Prettyprinter for the whole tree.
-        """
-        if indent == -1:
-            root = self
-            while root.parent:
-               root = root.parent
-            return root._as_tree(indent=0)
-
+    def _as_subtree(self, indent=0):
         buf = []
-        buf.append((" " * indent) + self.connector + ":")
-        indent += 2
         if self.negated:
             buf.append(" " * indent + "NOT")
+        buf.append((" " * indent) + self.connector + ":")
+        indent += 2
         for child in self.children:
             if isinstance(child, Node):
-                buf.append(child._as_tree(indent=indent))
+                buf.append(child._as_subtree(indent=indent))
             else:
                 buf.append((" " * indent) + str(child))
         return "\n".join(buf)
+    as_subtree = property(_as_subtree)
+
+    def _as_tree(self):
+        root = self
+        while root.parent:
+            root = root.parent
+        return root._as_subtree(indent=0)
     as_tree = property(_as_tree)
             
     def __len__(self):
@@ -119,6 +117,15 @@ class Node(object):
         """
         return other in self.children
 
+    def _add(self, *nodes):
+        """
+        A helper method to keep the parent/child links in valid state.
+        """
+        for node in nodes:
+            self.children.append(node)
+            if isinstance(node, Node):
+                node.parent = self
+
     def add(self, node, conn_type):
         """
         Adds a new node to the tree. If the conn_type is the same as the
@@ -128,32 +135,18 @@ class Node(object):
         """
         if node in self.children and conn_type == self.connector:
             return
-        if isinstance(node, Node):
-            node.parent = self
         if self.connector == conn_type:
-            self.children.append(node)
+            self._add(node)
         else:
-            obj = self._new_instance([node], conn_type, False)
+            obj = self._new_instance([node], conn_type)
             obj2 = self.clone()
-            obj.parent = obj2.parent = self
-            self.children = [obj, obj2]
+            self._add(obj, obj2)
 
     def negate(self):
         """
-        Negate the sense of the root connector. This reorganises the children
-        so that the current node has a single child: a negated node containing
-        all the previous children. This slightly odd construction makes adding
-        new children behave more intuitively.
-
-        Interpreting the meaning of this negate is up to client code. This
-        method is useful for implementing "not" arrangements.
+        Negate the sense of this node.
         """
         self.negated = not self.negated
-        """ 
-        self.children = [self._new_instance(self.children, self.connector,
-                not self.negated)]
-        self.connector = self.default
-        """
 
     def subtree(self, conn_type):
         obj = self.empty()
@@ -162,9 +155,20 @@ class Node(object):
         self.children.append(obj)
         return obj
 
-    def prune_unused_childs(self):
-        new_childs = []
-        for child in self.children:
-            if child:
-                new_childs.append(child)
-        self.children = new_childs
+    def prune_tree(self, recurse=False):
+        """
+        Removes empty children nodes, and non-necessary intermediatry
+        nodes from this node. If recurse is true, will recurse down
+        the tree.
+        """
+        old_childs = self.children[:]
+        self.children = []
+        for child in old_childs:
+            if not child:
+                continue
+            if isinstance(child, Node):
+                if recurse:
+                    child.prune_tree(recurse=True)
+                if not child.negated and len(child) == 1:
+                    child = child.children[0]
+            self._add(child)

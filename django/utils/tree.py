@@ -26,7 +26,7 @@ class Node(object):
         """
         self.children = children and children[:] or []
         self.connector = connector or self.default
-        self.subtree_parents = []
+        self.parent = None
         self.negated = negated
 
     # We need this because of django.db.models.query_utils.Q. Q. __init__() is
@@ -45,13 +45,19 @@ class Node(object):
         return obj
     _new_instance = classmethod(_new_instance)
 
-    def __str__(self):
-        if self.negated:
-            return '(NOT (%s: %s))' % (self.connector, ', '.join([str(c) for c
-                    in self.children]))
-        return '(%s: %s)' % (self.connector, ', '.join([str(c) for c in
-                self.children]))
+    def empty(cls):
+        return cls._new_instance([])
+    empty = classmethod(empty)
 
+    def clone(self, recurse=False):
+        assert recurse == False, 'recurse=True not implemented'
+        obj = self.empty()
+        obj.children = self.children[:]
+        obj.parent = self.parent
+        obj.connector = self.connector
+        obj.negated = self.negated
+        return obj
+    
     def __deepcopy__(self, memodict):
         """
         Utility method used by copy.deepcopy().
@@ -59,9 +65,42 @@ class Node(object):
         obj = Node(connector=self.connector, negated=self.negated)
         obj.__class__ = self.__class__
         obj.children = copy.deepcopy(self.children, memodict)
-        obj.subtree_parents = copy.deepcopy(self.subtree_parents, memodict)
+        obj.parent = copy.deepcopy(self.parent, memodict)
         return obj
+        
+    def __repr__(self):
+        return self.as_tree
 
+    def __str__(self):
+        if self.negated:
+            return '(NOT (%s: %s))' % (self.connector, ', '.join([str(c) for c
+                    in self.children]))
+        return '(%s: %s)' % (self.connector, ', '.join([str(c) for c in
+                self.children]))
+
+    def _as_tree(self, indent=-1):
+        """
+        Prettyprinter for the whole tree.
+        """
+        if indent == -1:
+            root = self
+            while root.parent:
+               root = root.parent
+            return root._as_tree(indent=0)
+
+        buf = []
+        buf.append((" " * indent) + self.connector + ":")
+        indent += 2
+        if self.negated:
+            buf.append(" " * indent + "NOT")
+        for child in self.children:
+            if isinstance(child, Node):
+                buf.append(child._as_tree(indent=indent))
+            else:
+                buf.append((" " * indent) + str(child))
+        return "\n".join(buf)
+    as_tree = property(_as_tree)
+            
     def __len__(self):
         """
         The size of a node if the number of children it has.
@@ -82,26 +121,22 @@ class Node(object):
 
     def add(self, node, conn_type):
         """
-        Adds a new node to the tree. If the conn_type is the same as the root's
-        current connector type, the node is added to the first level.
+        Adds a new node to the tree. If the conn_type is the same as the
+        root's current connector type, the node is added to the first level.
         Otherwise, the whole tree is pushed down one level and a new root
-        connector is created, connecting the existing tree and the new node.
+        connector is created, connecting the existing tree and the added node.
         """
         if node in self.children and conn_type == self.connector:
             return
-        if len(self.children) < 2:
-            self.connector = conn_type
+        if isinstance(node, Node):
+            node.parent = self
         if self.connector == conn_type:
-            if isinstance(node, Node) and (node.connector == conn_type or
-                    len(node) == 1):
-                self.children.extend(node.children)
-            else:
-                self.children.append(node)
+            self.children.append(node)
         else:
-            obj = self._new_instance(self.children, self.connector,
-                    self.negated)
-            self.connector = conn_type
-            self.children = [obj, node]
+            obj = self._new_instance([node], conn_type, False)
+            obj2 = self.clone()
+            obj.parent = obj2.parent = self
+            self.children = [obj, obj2]
 
     def negate(self):
         """
@@ -113,41 +148,23 @@ class Node(object):
         Interpreting the meaning of this negate is up to client code. This
         method is useful for implementing "not" arrangements.
         """
+        self.negated = not self.negated
+        """ 
         self.children = [self._new_instance(self.children, self.connector,
                 not self.negated)]
         self.connector = self.default
-
-    def start_subtree(self, conn_type):
         """
-        Sets up internal state so that new nodes are added to a subtree of the
-        current node. The conn_type specifies how the sub-tree is joined to the
-        existing children.
-        """
-        if len(self.children) == 1:
-            self.connector = conn_type
-        elif self.connector != conn_type:
-            self.children = [self._new_instance(self.children, self.connector,
-                    self.negated)]
-            self.connector = conn_type
-            self.negated = False
 
-        self.subtree_parents.append(self.__class__(self.children,
-                self.connector, self.negated))
-        self.connector = self.default
-        self.negated = False
-        self.children = []
+    def subtree(self, conn_type):
+        obj = self.empty()
+        obj.connector = conn_type
+        obj.parent = self
+        self.children.append(obj)
+        return obj
 
-    def end_subtree(self):
-        """
-        Closes off the most recently unmatched start_subtree() call.
-
-        This puts the current state into a node of the parent tree and returns
-        the current instances state to be the parent.
-        """
-        obj = self.subtree_parents.pop()
-        node = self.__class__(self.children, self.connector)
-        self.connector = obj.connector
-        self.negated = obj.negated
-        self.children = obj.children
-        self.children.append(node)
-
+    def prune_unused_childs(self):
+        new_childs = []
+        for child in self.children:
+            if child:
+                new_childs.append(child)
+        self.children = new_childs

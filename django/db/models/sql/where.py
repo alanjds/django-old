@@ -73,18 +73,28 @@ class WhereNode(tree.Node):
 
     def as_sql(self, qn, connection):
         """
-        Returns the SQL version of the where clause and the value to be
-        substituted in. Returns None, None if this node is empty.
+        Returns the SQL version of the where clause and the values to be
+        substituted in.
 
-        If 'node' is provided, that is the root of the SQL generation
-        (generally not needed except by the internal implementation for
-        recursion).
+        If the tree evaluates to always true, then the function will return
+        ("", []). If the function evaluates to always false, EmptyResultSet
+        will be risen.
         """
+        try:
+            return self._as_sql(qn, connection)
+        except FullResultSet:
+            return "", []
+
+    def _as_sql(self, qn, connection):
+        """
+        Internal helper.
+        """ 
         if not self.children:
-            return None, []
+            return '', []
         result = []
         result_params = []
-        empty = True
+        empty_vals = 0
+        full_vals = 0
         for child in self.children:
             try:
                 if hasattr(child, 'as_sql'):
@@ -92,30 +102,23 @@ class WhereNode(tree.Node):
                 else:
                     # A leaf node in the tree.
                     sql, params = self.make_atom(child, qn, connection)
-
-            except EmptyResultSet:
-                if self.connector == AND and not self.negated:
-                    # We can bail out early in this particular case (only).
-                    raise
-                elif self.negated:
-                    empty = False
-                continue
-            except FullResultSet:
-                if self.connector == OR:
-                    if self.negated:
-                        empty = True
-                        break
-                    # We match everything. No need for any constraints.
-                    return '', []
-                if self.negated:
-                    empty = True
-                continue
-
-            empty = False
-            if sql:
                 result.append(sql)
                 result_params.extend(params)
-        if empty:
+            except EmptyResultSet:
+                empty_vals += 1
+            except FullResultSet:
+                full_vals += 1
+
+        if self.negated:
+            full_vals, empty_vals = empty_vals, full_vals
+
+        if full_vals > 0 and self.connector == OR:
+            raise FullResultSet
+        if full_vals == len(self) and self.connector == AND:
+            raise FullResultSet
+        if empty_vals == len(self) and self.connector == OR:
+            raise EmptyResultSet
+        if empty_vals > 0 and self.connector == AND:
             raise EmptyResultSet
 
         conn = ' %s ' % self.connector

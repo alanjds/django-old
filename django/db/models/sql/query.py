@@ -515,7 +515,11 @@ class Query(object):
             w.add(EverythingNode(), AND)
         else:
             w = self.where_class()
-        self.where.add(w, connector)
+
+        self.where = self.where_class([self.where, w], connector)
+        # the root node's connectors must always be AND
+        if connector == OR:
+            self.where = self.where_class([self.where])
 
         # Selection columns and extra extensions are those provided by 'rhs'.
         self.select = []
@@ -1073,8 +1077,6 @@ class Query(object):
             if alias in (parts[0], LOOKUP_SEP.join(parts)):
                 entry = self.where_class()
                 entry.add((aggregate, lookup_type, value), AND)
-                if negate:
-                    entry.negate()
                 self.having.add(entry, connector)
                 return
 
@@ -1183,56 +1185,84 @@ class Query(object):
                 self.add_filter(filter, negate=negate, can_reuse=can_reuse,
                         process_extras=False)
 
-    def add_q(self, q_object, used_aliases=None, force_having=False):
+    def add_q(self, q_object, force_having=False):
         """
         Adds a Q-object to the current filter.
 
         Can also be used to add anything that has an 'add_to_query()' method.
-        """
-        if used_aliases is None:
-            used_aliases = self.used_aliases
-        if hasattr(q_object, 'add_to_query'):
-            # Complex custom objects are responsible for adding themselves.
-            q_object.add_to_query(self, used_aliases)
-        else:
-            if self.where and q_object.connector != AND and len(q_object) > 1:
-                self.where.start_subtree(AND)
-                subtree = True
-            else:
-                subtree = False
-            connector = AND
-            if q_object.connector == OR and not force_having:
-                force_having = self.need_force_having(q_object)
-            for child in q_object.children:
-                if connector == OR:
-                    refcounts_before = self.alias_refcount.copy()
-                if force_having:
-                    self.having.start_subtree(connector)
-                else:
-                    self.where.start_subtree(connector)
-                if isinstance(child, Node):
-                    self.add_q(child, used_aliases, force_having=force_having)
-                else:
-                    self.add_filter(child, connector, q_object.negated,
-                            can_reuse=used_aliases, force_having=force_having)
-                if force_having:
-                    self.having.end_subtree()
-                else:
-                    self.where.end_subtree()
 
-                if connector == OR:
-                    # Aliases that were newly added or not used at all need to
-                    # be promoted to outer joins if they are nullable relations.
-                    # (they shouldn't turn the whole conditional into the empty
-                    # set just because they don't match anything).
-                    self.promote_unused_aliases(refcounts_before, used_aliases)
-                connector = q_object.connector
-            if q_object.negated:
-                self.where.negate()
-            if subtree:
-                self.where.end_subtree()
-        if self.filter_is_sticky:
-            self.used_aliases = used_aliases
+        In case add_to_query path is not executed, this method's main purpose
+        is to manage the state of where / having trees.
+
+        We need to start a new subtree when:
+           - The connector of the q_object is different than the connector of
+             the where / having and there are childrens to this q object.
+           - The connector of the q_object is NOT.
+           
+        After call of this function with q_object=~Q(pk=1)&~Q(Q(pk=3)|Q(pk=2))
+        we should have the following tree:
+                      AND
+                     /   \
+                    NOT  NOT
+                     |     \
+                    pk=1   OR
+                          /  \
+                        pk=3 pk=2
+
+        This method will call recursively itself for those childrens of the
+        q_object which are Q-objs, and call add_filter for the leaf nodes.
+        """
+
+        # Complex custom objects are responsible for adding themselves.
+        if hasattr(q_object, 'add_to_query'):
+            q_object.add_to_query(self, self.used_aliases)
+            return
+
+        # We need to check upfront if this whole tree should be placed in
+        # the query's having clause or not. The reason is we can't have
+        # one part of ORed clause in having and the other in where. Once set,
+        # force_having can't be changed later on.
+        if not force_having and q_object.connector == OR:
+            force_having = self.need_force_having(q_object)
+
+        # Start subtrees for both having and where if needed. At the end we
+        # check if anything got added into the subtrees. If not, prune em.
+        where_subtree = False
+        having_subtree = False
+        connector = q_object.connector
+        if self.having.connector <> connector or q_object.negated:
+            self.having = self.having.subtree(q_object.connector)
+            having_subtree = True
+        if self.where.connector <> connector or q_object.negated:
+            self.where = self.where.subtree(q_object.connector)
+            where_subtree = True
+        if q_object.negated:
+            self.where.negate()
+            self.having.negate()
+
+        # Aliases that were newly added or not used at all need to
+        # be promoted to outer joins if they are nullable relations.
+        # (they shouldn't turn the whole conditional into the empty
+        # set just because they don't match anything). Take the
+        # before snapshot of the aliases.
+        if connector == OR:
+            refcounts_before = self.alias_refcount.copy()
+
+        for child in q_object.children:
+            if isinstance(child, Node):
+                self.add_q(child, force_having=force_having)
+            else:
+                self.add_filter(child, connector, q_object.negated,
+                        can_reuse=self.used_aliases, force_having=force_having)
+
+        if connector == OR:
+            self.promote_unused_aliases(refcounts_before, self.used_aliases)
+        if having_subtree:
+            self.having = self.having.parent
+            self.having.prune_unused_childs()
+        if where_subtree:
+            self.where = self.where.parent
+            self.where.prune_unused_childs()
 
     def setup_joins(self, names, opts, alias, dupe_multis, allow_many=True,
             allow_explicit_fk=False, can_reuse=None, negate=False,

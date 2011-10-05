@@ -5,7 +5,7 @@ from django.db import transaction
 from django.db.backends.util import truncate_name
 from django.db.models.query_utils import select_related_descend
 from django.db.models.sql.constants import *
-from django.db.models.sql.datastructures import EmptyResultSet
+from django.db.models.sql.datastructures import EmptyResultSet, FullResultSet
 from django.db.models.sql.expressions import SQLEvaluator
 from django.db.models.sql.query import get_proxied_model, get_order_dir, Query
 from django.db.utils import DatabaseError
@@ -68,7 +68,6 @@ class SQLCompiler(object):
         from_, f_params = self.get_from_clause()
 
         qn = self.quote_name_unless_alias
-
         where, w_params = self.query.where.as_sql(qn=qn, connection=self.connection)
         having, h_params = self.query.having.as_sql(qn=qn, connection=self.connection)
         params = []

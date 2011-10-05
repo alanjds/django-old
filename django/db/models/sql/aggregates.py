@@ -70,7 +70,9 @@ class Aggregate(object):
         self.field = tmp
 
     def clone(self):
-        return self
+        clone = copy.copy(self)
+        clone.col = self.col[:]
+        return clone
 
     def relabel_aliases(self, change_map):
         if isinstance(self.col, (list, tuple)):

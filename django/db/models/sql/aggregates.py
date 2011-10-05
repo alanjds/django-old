@@ -69,6 +69,9 @@ class Aggregate(object):
 
         self.field = tmp
 
+    def clone(self):
+        return self
+
     def relabel_aliases(self, change_map):
         if isinstance(self.col, (list, tuple)):
             self.col = (change_map.get(self.col[0], self.col[0]), self.col[1])

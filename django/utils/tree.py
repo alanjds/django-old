@@ -49,25 +49,23 @@ class Node(object):
         return cls._new_instance([])
     empty = classmethod(empty)
 
-    def clone(self, recurse=False):
-        assert recurse == False, 'recurse=True not implemented'
+
+    def clone(self, memo={}):
+        if self in memo:
+            return memo[self]
         obj = self.empty()
-        obj.children = self.children[:]
-        obj.parent = self.parent
+        memo[self] = obj
+        for child in self.children:
+             if isinstance(child, Node):
+                 child = child.clone(memo=memo)
+             obj._add(child)
+        if self.parent is not None:
+            new_parent = self.parent.clone(memo=memo)
+            obj.parent = new_parent
         obj.connector = self.connector
         obj.negated = self.negated
         return obj
     
-    def __deepcopy__(self, memodict):
-        """
-        Utility method used by copy.deepcopy().
-        """
-        obj = Node(connector=self.connector, negated=self.negated)
-        obj.__class__ = self.__class__
-        obj.children = copy.deepcopy(self.children, memodict)
-        obj.parent = copy.deepcopy(self.parent, memodict)
-        return obj
-        
     def __repr__(self):
         return self.as_subtree
 

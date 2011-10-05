@@ -820,7 +820,7 @@ class Queries1Tests(BaseQuerysetTest):
         q = Note.objects.filter(Q(extrainfo__author=self.a1)|Q(extrainfo=xx)).query
         self.assertEqual(
             len([x[2] for x in q.alias_map.values() if x[2] == q.LOUTER and q.alias_refcount[x[1]]]),
-            1
+            2
         )
 
 

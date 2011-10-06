@@ -1771,27 +1771,12 @@ def _prefetch_one_level(instances, relmanager, r_obj):
     # prefetch_related fields to the QuerySet we just got back. We don't want to
     # trigger the prefetch_related functionality by evaluating the query.
     # Rather, we need to merge in the prefetch_related fields.
-    additional_prf = rel_qs._prefetch_related_lookups
-    rel_qs._prefetch_done = True
-    """
-=======
-    prefetches that must be done due to prefetch_related lookups
-    found from default managers.
-    "" "
-    rel_qs, rel_obj_attr, instance_attr = relmanager.get_prefetch_query_set(instances)
-    # We have to handle the possibility that the default manager itself added
-    # prefetch_related lookups to the QuerySet we just got back. We don't want to
-    # trigger the prefetch_related functionality by evaluating the query.
-    # Rather, we need to merge in the prefetch_related lookups.
-    additional_prl = getattr(rel_qs, '_prefetch_related_lookups', [])
+    additional_prl = rel_qs._prefetch_related_lookups
     if additional_prl:
         # Don't need to clone because the manager should have given us a fresh
         # instance, so we access an internal instead of using public interface
         # for performance reasons.
         rel_qs._prefetch_related_lookups = []
-
->>>>>>> master
-    """
     all_related_objects = list(rel_qs)
 
     rel_obj_cache = {}
@@ -1812,15 +1797,3 @@ def _prefetch_one_level(instances, relmanager, r_obj):
         else:
             setattr(obj, r_obj.to_attr, results)
     return all_related_objects, additional_prf
-    """
-=======
-        qs = getattr(obj, attname).all()
-        instance_attr_val = getattr(obj, instance_attr)
-        qs._result_cache = rel_obj_cache.get(instance_attr_val, [])
-        # We don't want the individual qs doing prefetch_related now, since we
-        # have merged this into the current work.
-        qs._prefetch_done = True
-        obj._prefetched_objects_cache[attname] = qs
-    return all_related_objects, additional_prl
->>>>>>> master
-    """

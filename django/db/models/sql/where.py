@@ -93,6 +93,9 @@ class WhereNode(tree.Node):
             return '', []
         result = []
         result_params = []
+        # Track the amount of EmptyResultSets and FullResultSets this node
+        # has. These + self.connector and self.negated are used to check
+        # if this node matches nothing or matches everything.
         empty_vals = 0
         full_vals = 0
         for child in self.children:
@@ -251,33 +254,6 @@ class WhereNode(tree.Node):
                 # Check if the query value also requires relabelling
                 if hasattr(child[3], 'relabel_aliases'):
                     child[3].relabel_aliases(change_map)
-
-class EverythingNode(object):
-    """
-    A node that matches everything.
-    """
-
-    def as_sql(self, qn=None, connection=None):
-        raise FullResultSet
-
-    def relabel_aliases(self, change_map, node=None):
-        return
-
-    def clone(self):
-        return self
-
-class NothingNode(object):
-    """
-    A node that matches nothing.
-    """
-    def as_sql(self, qn=None, connection=None):
-        raise EmptyResultSet
-
-    def relabel_aliases(self, change_map, node=None):
-        return
-
-    def clone(self):
-        return self
 
 class ExtraWhere(object):
     def __init__(self, sqls, params):

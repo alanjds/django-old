@@ -20,8 +20,8 @@ from django.db.models.sql import aggregates as base_aggregates_module
 from django.db.models.sql.constants import *
 from django.db.models.sql.datastructures import EmptyResultSet, Empty, MultiJoin
 from django.db.models.sql.expressions import SQLEvaluator
-from django.db.models.sql.where import (WhereNode, Constraint, EverythingNode,
-    ExtraWhere, AND, OR)
+from django.db.models.sql.where import (WhereNode, Constraint, ExtraWhere,
+    AND, OR)
 from django.core.exceptions import FieldError
 
 __all__ = ['Query', 'RawQuery']

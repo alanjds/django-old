@@ -1196,7 +1196,7 @@ class Query(object):
            - The connector of the q_object is different than the connector of
              the where / having tree.
            - The q_object is negated.
- 
+
         After call of this function with q_object=~Q(pk=1)&~Q(Q(pk=3)|Q(pk=2))
         we should have the following tree:
                       AND

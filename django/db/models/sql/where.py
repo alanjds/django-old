@@ -85,7 +85,7 @@ class WhereNode(tree.Node):
     def _as_sql(self, qn, connection):
         """
         Internal helper.
-        """ 
+        """
         if not self.children:
             return '', []
         result = []

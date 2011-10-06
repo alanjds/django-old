@@ -72,7 +72,7 @@ class Node(object):
         obj.connector = self.connector
         obj.negated = self.negated
         return obj
-    
+
     def __repr__(self):
         return self.as_subtree
 
@@ -103,7 +103,7 @@ class Node(object):
             root = root.parent
         return root._as_subtree(indent=0)
     as_tree = property(_as_tree)
-            
+
     def __len__(self):
         """
         The size of a node if the number of children it has.

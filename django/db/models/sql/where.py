@@ -64,9 +64,6 @@ class WhereNode(tree.Node):
 
         if hasattr(obj, "prepare"):
             value = obj.prepare(lookup_type, value)
-            super(WhereNode, self).add((obj, lookup_type, annotation, value),
-                connector)
-            return
 
         super(WhereNode, self).add((obj, lookup_type, annotation, value),
                 connector)

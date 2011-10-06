@@ -1590,7 +1590,7 @@ def convert_prefetch_lookups(related_lookups, done_lookups, prefix=None):
     prefix = prefix and prefix + LOOKUP_SEP or ''
     # Convert the lookups, which can have R and string lookups mixed, into a
     # consistent format.
-    r_objs = [isinstance(f, R) and f or R(f) for f in fields]
+    r_objs = [isinstance(f, R) and f or R(f) for f in related_lookups]
     if prefix:
        [setattr(r, 'lookup', prefix + r.lookup) for r in r_objs]
 
@@ -1598,7 +1598,7 @@ def convert_prefetch_lookups(related_lookups, done_lookups, prefix=None):
     # the given r_obj is final. R('foo__bar') will be converted to
     # [(R('foo'), False), (R('foo_bar'), True)]
     ordered_r_objs = []
-    for r_obj in converted:
+    for r_obj in r_objs:
         if r_obj.lookup_path in done_lookups:
             continue
         # The outermost r_obj is somewhat special in its handling, it is final
@@ -1673,17 +1673,17 @@ def prefetch_related_objects(result_cache, related_lookups):
                 (cur_lookup, obj_list[0].__class__.__name__, prev_lookup))
 
         if hasattr(rel_obj, 'get_prefetch_query_set'):
-            obj_list, additional_prf = _prefetch_one_level(obj_list, rel_obj, r_obj)
+            obj_list, additional_prl = _prefetch_one_level(obj_list, rel_obj, r_obj)
             ordered_r_objs.extend(
-                convert_prefetch(additional_prf, done_lookups,
-                                 prefix=r_obj.lookup_path))
+                convert_prefetch_lookups(additional_prl, done_lookups,
+                                         prefix=r_obj.lookup_path))
             done_objs[r_obj.lookup_path] = obj_list
         else:
             if is_final:
                  raise ValueError(
-                     'Invalid lookup %s for prefetch_related.'
-                     'The final part %s leads does not support prefetching' %
-                     (prev_lookup, cur_lookup))
+                     'Invalid lookup %s for prefetch_related. '
+                     'The final part %s leads does not support prefetching'
+                     % (prev_lookup, cur_lookup))
             # Assume we've got some singly related object. We replace
             # the current list of parent objects with that list.
             obj_list = [getattr(obj, cur_lookup) for obj in obj_list]
@@ -1740,4 +1740,4 @@ def _prefetch_one_level(instances, relmanager, r_obj):
             obj._prefetched_objects_cache[r_obj.attname] = qs
         else:
             setattr(obj, r_obj.to_attr, results)
-    return all_related_objects, additional_prf
+    return all_related_objects, additional_prl

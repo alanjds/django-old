@@ -1,13 +1,32 @@
 from __future__ import with_statement
 
 from django.contrib.contenttypes.models import ContentType
+from django.db.models import R
 from django.test import TestCase
 from django.utils import unittest
 
 from models import (Author, Book, Reader, Qualification, Teacher, Department,
                     TaggedItem, Bookmark, AuthorAddress, FavoriteAuthors,
                     AuthorWithAge, BookWithYear, Person, House, Room,
-                    Employee)
+                    Employee, AuthorWithDefPrefetch, BookWithDefPrefetch)
+
+def traverse_qs(obj_iter, path_lists):
+    """
+    Helper method that returns a list containing a list of the objects, and a 
+    list of lists for each related fetch in the queryset. The path defines what
+    attributes to travel.
+    """
+    ret_val = []
+    if hasattr(obj_iter, 'all'):
+        obj_iter = obj_iter.all()
+    for obj in obj_iter:
+        rel_objs = []
+        ret_val.append((obj, rel_objs))
+        for path in path_lists:
+            if not path:
+                continue
+            rel_objs.extend(traverse_qs(getattr(obj, path[0]), [path[1:]]))
+    return ret_val
 
 
 class PrefetchRelatedTests(TestCase):
@@ -38,6 +57,15 @@ class PrefetchRelatedTests(TestCase):
 
         self.reader1.books_read.add(self.book1, self.book4)
         self.reader2.books_read.add(self.book2, self.book4)
+
+    def test_metatest_traverse_qs(self):
+        qs = Book.objects.prefetch_related('authors')
+        related_objs_normal = [list(b.authors.all()) for b in qs],
+        related_objs_from_traverse = [[inner[0] for inner in o[1]] 
+                                      for o in traverse_qs(qs, [['authors']])]
+        self.assertEquals(related_objs_normal, (related_objs_from_traverse,))
+        self.assertFalse(related_objs_from_traverse == traverse_qs(qs.filter(pk=1),
+                         [['authors']]))
 
     def test_m2m_forward(self):
         with self.assertNumQueries(2):
@@ -416,3 +444,143 @@ class NullableTest(TestCase):
                         for e in qs2]
 
         self.assertEqual(co_serfs, co_serfs2)
+
+class CircularPrefetchTest(TestCase):
+
+    def setUp(self):
+       self.eva = AuthorWithDefPrefetch.objects.create(name='Eva')
+       self.bob = AuthorWithDefPrefetch.objects.create(name='Bob',
+                                                       best_friend=self.eva)
+       self.eva.best_friend = self.bob
+       self.eva.save()
+
+    def test_recursive_prefetch(self):
+       # The defaul manager will raise an error if called more than 100 times,
+       # this could happen due to recursion.
+       qs = AuthorWithDefPrefetch.objects.all()[0]
+       book = BookWithDefPrefetch.objects.create(name='Spam, Spam, Spam')
+       book.authors.add(self.eva)
+       BookWithDefPrefetch.objects.all()[0]
+
+class RObjectTest(TestCase):
+    def setUp(self):
+        self.person1 = Person.objects.create(name="Joe")
+        self.person2 = Person.objects.create(name="Mary")
+
+        self.house1 = House.objects.create(address="123 Main St")
+        self.house2 = House.objects.create(address="45 Side St")
+        self.house3 = House.objects.create(address="6 Downing St")
+        self.house4 = House.objects.create(address="7 Regents St")
+
+        self.room1_1 = Room.objects.create(name="Dining room", house=self.house1)
+        self.room1_2 = Room.objects.create(name="Lounge", house=self.house1)
+        self.room1_3 = Room.objects.create(name="Kitchen", house=self.house1)
+
+        self.room2_1 = Room.objects.create(name="Dining room", house=self.house2)
+        self.room2_2 = Room.objects.create(name="Lounge", house=self.house2)
+
+        self.room3_1 = Room.objects.create(name="Dining room", house=self.house3)
+        self.room3_2 = Room.objects.create(name="Lounge", house=self.house3)
+        self.room3_3 = Room.objects.create(name="Kitchen", house=self.house3)
+
+        self.room4_1 = Room.objects.create(name="Dining room", house=self.house4)
+        self.room4_2 = Room.objects.create(name="Lounge", house=self.house4)
+
+        self.person1.houses.add(self.house1, self.house2)
+        self.person2.houses.add(self.house3, self.house4)
+
+    def test_robj_basics(self):
+        # Test different combinations of R and non-R lookups
+        with self.assertNumQueries(2):
+            lst1 = traverse_qs(Person.objects.prefetch_related('houses'), 
+                               [['houses']])
+        with self.assertNumQueries(2):
+            lst2 = traverse_qs(Person.objects.prefetch_related(R('houses')), 
+                               [['houses']])
+        self.assertEquals(lst1, lst2)
+        with self.assertNumQueries(3):
+            lst1 = traverse_qs(Person.objects.prefetch_related('houses', 'houses__rooms'), 
+                               [['houses', 'rooms']])
+        with self.assertNumQueries(3):
+            lst2 = traverse_qs(Person.objects.prefetch_related(R('houses'), R('houses__rooms')), 
+                               [['houses', 'rooms']])
+        self.assertEquals(lst1, lst2)
+        with self.assertNumQueries(3):
+            lst1 = traverse_qs(Person.objects.prefetch_related('houses', 'houses__rooms'), 
+                               [['houses', 'rooms']])
+        with self.assertNumQueries(3):
+            lst2 = traverse_qs(Person.objects.prefetch_related(R('houses'), 'houses__rooms'), 
+                               [['houses', 'rooms']])
+        self.assertEquals(lst1, lst2)
+        # Test to_attr
+        with self.assertNumQueries(3):
+            lst1 = traverse_qs(Person.objects.prefetch_related('houses', 'houses__rooms'), 
+                               [['houses', 'rooms']])
+        with self.assertNumQueries(3):
+            lst2 = traverse_qs(Person.objects.prefetch_related(
+                                  R('houses', to_attr='houses_lst'),
+                                  'houses_lst__rooms'), 
+                               [['houses_lst', 'rooms']])
+        self.assertEquals(lst1, lst2)
+
+        with self.assertNumQueries(3):
+            lst2 = traverse_qs(
+                Person.objects.prefetch_related(
+                    R('houses', to_attr='houses_lst'),
+                    R('houses_lst__rooms', to_attr='rooms_lst')
+                ), 
+                [['houses_lst', 'rooms_lst']]
+            )
+        with self.assertNumQueries(4):
+            qs = list(Person.objects.prefetch_related(
+                    R('houses', to_attr='houses_lst'),
+                    R('houses__rooms', to_attr='rooms_lst')
+            ))
+            with self.assertRaises(AttributeError):
+                qs[0].houses_lst[0].rooms_lst
+            qs[0].houses.all()[0].rooms_lst
+            lst2 = traverse_qs(
+                qs, [['houses', 'rooms_lst']]
+            )
+            self.assertEquals(lst1, lst2)
+            self.assertEquals(
+                traverse_qs(qs, [['houses']]),
+                traverse_qs(qs, [['houses_lst']])
+            )
+
+    def test_custom_qs(self):
+        per_qs = Person.objects.all()
+        houses_qs = House.objects.all()
+        with self.assertNumQueries(2):
+             lst1 = list(per_qs.prefetch_related('houses'))
+        with self.assertNumQueries(2):
+             lst2 = list(per_qs.prefetch_related(
+                 R('houses', qs=houses_qs, to_attr='houses_lst')
+             ))
+        self.assertEquals(
+            traverse_qs(lst1, [['houses']]),
+            traverse_qs(lst2, [['houses_lst']])
+        )
+        with self.assertNumQueries(2):
+            lst2 = list(per_qs.prefetch_related(
+                R('houses', qs=houses_qs.filter(pk__in=[self.house1.pk, self.house3.pk]),
+                  to_attr='hlst')
+            ))
+        self.assertEquals(len(lst2[0].hlst), 1)
+        self.assertEquals(lst2[0].hlst[0], self.house1)
+        self.assertEquals(len(lst2[1].hlst), 1)
+        self.assertEquals(lst2[1].hlst[0], self.house3)
+
+        with self.assertNumQueries(3):
+            lst2 = list(per_qs.prefetch_related(
+                       R('houses', qs=houses_qs.filter(pk=self.house1.pk), to_attr='hlst'),
+                       R('hlst__rooms', 
+                         qs=Room.objects.filter(pk__in=[self.room1_1.pk, self.room1_2.pk]),
+                         to_attr='rooms_lst')
+                   ))
+        self.assertEquals(len(lst2[0].hlst[0].rooms_lst), 2)
+        self.assertEquals(lst2[0].hlst[0].rooms_lst[0], self.room1_1)
+        self.assertEquals(lst2[0].hlst[0].rooms_lst[1], self.room1_2)
+        self.assertEquals(len(lst2[1].hlst), 0)
+            
+ 

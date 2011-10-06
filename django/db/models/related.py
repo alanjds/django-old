@@ -76,6 +76,9 @@ class R(object):
     A class used for passing options to .prefetch_related.
     """
     def __init__(self, lookup, to_attr=None, qs=None):
+        if qs is not None and not to_attr:
+            raise ValueError('When custom qs is defined, to_attr '
+                             'must also be defined')
         self.lookup = lookup
         self.to_attr = to_attr or ''
         self.qs = qs
@@ -87,10 +90,23 @@ class R(object):
         return '<%s: %s>' % (self.__class__.__name__, unicode(self))
 
     def _lookup_path(self):
-        lookup, sep, cur_part = self.lookup.rpartition(LOOKUP_SEP)
-        return lookup + sep + self.to_attr or cur_part
+        """
+        This getter defines the lookup path when referring to objects
+        this r-obj added to the query. The lookup path is self.lookup
+        if we have do not have to_attr, or self.lookup with last
+        part changed to self.to_attr.
+        """
+        if not self.to_attr:
+            return self.lookup
+        else:
+            lookup, sep, last_part = self.lookup.rpartition(LOOKUP_SEP)
+            return lookup + sep + self.to_attr
     lookup_path = property(_lookup_path)
 
     def _attname(self):
         return self.lookup.rpartition(LOOKUP_SEP)[2]
     attname = property(_attname)
+
+    def _calculated_to_attr(self):
+        return self.to_attr or self.attname
+    calculated_to_attr = property(_calculated_to_attr)

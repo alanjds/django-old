@@ -58,6 +58,32 @@ class BookWithYear(Book):
         AuthorWithAge, related_name='books_with_year')
 
 
+class AuthorDefManager(models.Manager):
+    # Default manager with possibly recursive results.
+    def get_query_set(self):
+        qs = super(AuthorDefManager, self).get_query_set()
+        return qs.prefetch_related('best_friend_reverse', 'books')
+
+class AuthorWithDefPrefetch(models.Model):
+    name = models.TextField()
+    best_friend = models.ForeignKey(
+         'self', related_name='best_friend_reverse', null=True)
+    objects = AuthorDefManager()
+
+class BookDefManager(models.Manager):
+    # No need for guard here, author's manager will take care of that.
+    def get_query_set(self):
+        return (super(BookDefManager, self).get_query_set()
+                .prefetch_related('authors'))
+
+class BookWithDefPrefetch(models.Model):
+    name = models.TextField()
+    authors = models.ManyToManyField(AuthorWithDefPrefetch,
+                                     related_name='books')
+
+    objects = BookDefManager()
+ 
+
 class Reader(models.Model):
     name = models.CharField(max_length=50)
     books_read = models.ManyToManyField(Book, related_name='read_by')
@@ -151,7 +177,7 @@ class Person(models.Model):
         ordering = ['id']
 
 
-## Models for nullable FK tests
+## Models for nullable FK tests and recursive prefetch_related tests.
 
 class Employee(models.Model):
     name = models.CharField(max_length=50)
@@ -163,3 +189,4 @@ class Employee(models.Model):
 
     class Meta:
         ordering = ['id']
+

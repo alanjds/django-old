@@ -24,6 +24,11 @@ ITER_CHUNK_SIZE = CHUNK_SIZE
 # The maximum number of items to display in a QuerySet.__repr__
 REPR_OUTPUT_SIZE = 20
 
+# The maximum amount of prefetch lookups to have in one query. Made large
+# enough so that we never hit it in practical queries. Guards agains infinite
+# recursion.
+MAX_PREFETCH_LOOKUPS = 200
+
 # Pull into this namespace for backwards compatibility.
 EmptyResultSet = sql.EmptyResultSet
 
@@ -1570,7 +1575,9 @@ def insert_query(model, objs, fields, return_id=False, raw=False, using=None):
     query.insert_values(fields, objs, raw=raw)
     return query.get_compiler(using=using).execute_sql(return_id)
 
-def convert_prefetch_lookups(related_lookups, done_lookups, prefix=None):
+
+def convert_prefetch_lookups(related_lookups, seen_lookups, prefix=None,
+                             model_path=None):
     """
     A helper function for prefetch_related_objects. The function can be
     called both for the original lookups given in the queryset, or for lookups
@@ -1582,38 +1589,44 @@ def convert_prefetch_lookups(related_lookups, done_lookups, prefix=None):
 
     Note that we do NOT guarantee that the immediate acestor of the lookup
     is immediately before the lookup in the list, thus, this is because the
-    lookup might already exists in the done_lookups list. Thus lookups
+    lookup might already exists in the seen_lookups list. Thus lookups
     foo__bar__baz might be resolved to [foo__bar, foo__bar__baz]. It is also
     possible that the lookup would resolve to [], if it was already in the
     list.
     """
+    if not model_path:
+        model_path = set()
+
     prefix = prefix and prefix + LOOKUP_SEP or ''
+
     # Convert the lookups, which can have R and string lookups mixed, into a
     # consistent format.
-    r_objs = [isinstance(f, R) and f or R(f) for f in related_lookups]
+    r_objs = [isinstance(rl, R) and rl or R(rl) for rl in related_lookups]
     if prefix:
-       [setattr(r, 'lookup', prefix + r.lookup) for r in r_objs]
+        [setattr(r, 'lookup', prefix + r.lookup) for r in r_objs]
 
     # Convert the R-objs to ordered format. Also append information about if
     # the given r_obj is final. R('foo__bar') will be converted to
     # [(R('foo'), False), (R('foo_bar'), True)]
     ordered_r_objs = []
     for r_obj in r_objs:
-        if r_obj.lookup_path in done_lookups:
+        if r_obj.lookup_path in seen_lookups:
             continue
         # The outermost r_obj is somewhat special in its handling, it is final
         # and it can have different lookup_path due to R.to_attr.
-        done_lookups.add(r_obj.lookup_path)
+        seen_lookups.add(r_obj.lookup_path)
         lookup, _, _ = r_obj.lookup.rpartition(LOOKUP_SEP)
         needed_r_objs = [(r_obj, True)]
         # Loop through the rest of the path.
-        while lookup and lookup not in done_lookups:
-            done_lookups.add(lookup)
+        while lookup and lookup not in seen_lookups:
+            seen_lookups.add(lookup)
             needed_r_objs.append((R(lookup), False))
             lookup, _, _ = lookup.rpartition(LOOKUP_SEP)
         # We did the lookup path from top to bottom -> reverse.
         needed_r_objs.reverse()
         ordered_r_objs.extend(needed_r_objs)
+    assert len(seen_lookups) < MAX_PREFETCH_LOOKUPS,\
+           "Too many prefetch lookups in sinqle query."
     return ordered_r_objs
 
 def prefetch_related_objects(result_cache, related_lookups):
@@ -1640,16 +1653,28 @@ def prefetch_related_objects(result_cache, related_lookups):
 
     model = result_cache[0].__class__
 
-    done_lookups = set()
-    ordered_r_objs = convert_prefetch_lookups(related_lookups, done_lookups)
+    # Recored seen lookups so that we do not add the same lookup multiple
+    # times into ordered_r_objs.
+    seen_lookups = set()
+    ordered_r_objs = convert_prefetch_lookups(related_lookups, seen_lookups)
     
-    # the upmost level has no lookup path, hence the ''
-    done_objs = {'': result_cache}
+    # Currently recursive prefetches are removed from the lookups. We
+    # identify these recursions by recording
+    #    (from_model, to_attr)
+    # information in done_transitions. This is the identifying key for the
+    # transitions. If we see the same transition again, skip the lookup.
+    done_transitions = set()
+
+    # The upmost level has no lookup path, hence the ''.
+    done_lookups = {'': result_cache}
+
     for (r_obj, is_final) in ordered_r_objs:
         prev_lookup, _, cur_lookup = r_obj.lookup.rpartition(LOOKUP_SEP)
-        obj_list = done_objs[prev_lookup]
+        obj_list = done_lookups.get(prev_lookup, [])
+
         if len(obj_list) == 0:
             continue
+
         # Assume that all objs in the list are homogenous, 
         # test correct behavior with first object.
         test_obj = obj_list[0]
@@ -1657,7 +1682,8 @@ def prefetch_related_objects(result_cache, related_lookups):
             # Must be in a QuerySet subclass that is not returning
             # Model instances, either in Django or 3rd party.
             # prefetch_related() doesn't make sense, so quit now.
-            # TODO: add comment why not raise Exception?
+            # TODO: add comment why not raise Exception? Why break
+            # instead of continue.
             break
 
         for obj in obj_list:
@@ -1673,11 +1699,18 @@ def prefetch_related_objects(result_cache, related_lookups):
                 (cur_lookup, obj_list[0].__class__.__name__, prev_lookup))
 
         if hasattr(rel_obj, 'get_prefetch_query_set'):
+            transition_key = (
+               rel_obj.instance.__class__, r_obj.calculated_to_attr
+            )
+            if transition_key in done_transitions:
+                # This seems to be an recursive fetch. Abort.
+                continue
+            done_transitions.add(transition_key)
             obj_list, additional_prl = _prefetch_one_level(obj_list, rel_obj, r_obj)
             ordered_r_objs.extend(
-                convert_prefetch_lookups(additional_prl, done_lookups,
+                convert_prefetch_lookups(additional_prl, seen_lookups,
                                          prefix=r_obj.lookup_path))
-            done_objs[r_obj.lookup_path] = obj_list
+            done_lookups[r_obj.lookup_path] = obj_list
         else:
             if is_final:
                  raise ValueError(
@@ -1692,7 +1725,7 @@ def prefetch_related_objects(result_cache, related_lookups):
             # relations.
             obj_list = [obj for obj in obj_list if obj is not None]
 
-        done_objs[r_obj.lookup_path] = obj_list
+        done_lookups[r_obj.lookup_path] = obj_list
 
 def _prefetch_one_level(instances, relmanager, r_obj):
     """

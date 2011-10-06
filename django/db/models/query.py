@@ -1570,30 +1570,48 @@ def insert_query(model, objs, fields, return_id=False, raw=False, using=None):
     query.insert_values(fields, objs, raw=raw)
     return query.get_compiler(using=using).execute_sql(return_id)
 
-def convert_prefetch(fields, done_lookups, prefix=None):
-    prefix = prefix and prefix + LOOKUP_SEP or ''
-    # Convert the fields, which can have R and string lookups mixed, into a
-    # consistent format. After converting fields will be R objects.
-    converted = [isinstance(f, R) and f or R(f) for f in fields]
-    if prefix:
-       [setattr(r, 'lookup', prefix + r.lookup) for r in converted]   
+def convert_prefetch_lookups(related_lookups, done_lookups, prefix=None):
+    """
+    A helper function for prefetch_related_objects. The function can be
+    called both for the original lookups given in the queryset, or for lookups
+    added by prefetched objects.
 
-    # We do the related object travelsal in two steps.
-    # First convert the above converted list into having all necessary
-    # steps needed in the path, that is
-    # [R('foo__bar__baz'), R('foo')] 
-    # -> [R('foo'), R('foo__bar'), R('foo__bar__baz')]
+    This function will return the given lookups into dependency ordered list
+    of R-objs. The dependency is determined by the prefix part of the lookup
+    path. Thus foo__bar__baz depends on foo__bar which in turn depends on foo.
+
+    Note that we do NOT guarantee that the immediate acestor of the lookup
+    is immediately before the lookup in the list, thus, this is because the
+    lookup might already exists in the done_lookups list. Thus lookups
+    foo__bar__baz might be resolved to [foo__bar, foo__bar__baz]. It is also
+    possible that the lookup would resolve to [], if it was already in the
+    list.
+    """
+    prefix = prefix and prefix + LOOKUP_SEP or ''
+    # Convert the lookups, which can have R and string lookups mixed, into a
+    # consistent format.
+    r_objs = [isinstance(f, R) and f or R(f) for f in fields]
+    if prefix:
+       [setattr(r, 'lookup', prefix + r.lookup) for r in r_objs]
+
+    # Convert the R-objs to ordered format. Also append information about if
+    # the given r_obj is final. R('foo__bar') will be converted to
+    # [(R('foo'), False), (R('foo_bar'), True)]
     ordered_r_objs = []
     for r_obj in converted:
         if r_obj.lookup_path in done_lookups:
             continue
+        # The outermost r_obj is somewhat special in its handling, it is final
+        # and it can have different lookup_path due to R.to_attr.
         done_lookups.add(r_obj.lookup_path)
-        lookup, _, _ = (r_obj.lookup).rpartition(LOOKUP_SEP)
+        lookup, _, _ = r_obj.lookup.rpartition(LOOKUP_SEP)
         needed_r_objs = [(r_obj, True)]
+        # Loop through the rest of the path.
         while lookup and lookup not in done_lookups:
             done_lookups.add(lookup)
             needed_r_objs.append((R(lookup), False))
             lookup, _, _ = lookup.rpartition(LOOKUP_SEP)
+        # We did the lookup path from top to bottom -> reverse.
         needed_r_objs.reverse()
         ordered_r_objs.extend(needed_r_objs)
     return ordered_r_objs
@@ -1604,7 +1622,18 @@ def prefetch_related_objects(result_cache, related_lookups):
     
     Populates prefetched objects caches for a list of results
     from a QuerySet
+
+    The work we do can be described as follows:
+      1. Convert the given lookups into dependency ordered R-objects. Consult
+         convert_prefetch_lookups for details.
+      2. For each R-object, check if it leads to prefetchable relation. If not
+         just descend to next level.
+      3. Prefetch objects according to each R-object. The prefetch can add
+         more lookups, but as they must depend on the just prefetched objects,
+         we can add the new lookups to the end of the ordered R-objects list.
     """
+    # Avoid circular import
+    from django.db.models import Model
 
     if len(result_cache) == 0:
         return # nothing to do
@@ -1612,7 +1641,7 @@ def prefetch_related_objects(result_cache, related_lookups):
     model = result_cache[0].__class__
 
     done_lookups = set()
-    ordered_r_objs = convert_prefetch(related_lookups, done_lookups)
+    ordered_r_objs = convert_prefetch_lookups(related_lookups, done_lookups)
     
     # the upmost level has no lookup path, hence the ''
     done_objs = {'': result_cache}
@@ -1624,12 +1653,11 @@ def prefetch_related_objects(result_cache, related_lookups):
         # Assume that all objs in the list are homogenous, 
         # test correct behavior with first object.
         test_obj = obj_list[0]
-        from django.db.models import Model
         if not isinstance(test_obj, Model):
             # Must be in a QuerySet subclass that is not returning
-            # Model instances, either in Django or 3rd
-            # party. prefetch_related() doesn't make sense, so quit
-            # now.
+            # Model instances, either in Django or 3rd party.
+            # prefetch_related() doesn't make sense, so quit now.
+            # TODO: add comment why not raise Exception?
             break
 
         for obj in obj_list:
@@ -1658,119 +1686,32 @@ def prefetch_related_objects(result_cache, related_lookups):
                      (prev_lookup, cur_lookup))
             # Assume we've got some singly related object. We replace
             # the current list of parent objects with that list.
-            obj_list = [getattr(obj, cur_lookup) for obj in obj_list if obj is not None]
+            obj_list = [getattr(obj, cur_lookup) for obj in obj_list]
             
             # Filter out 'None' so that we can continue with nullable
             # relations.
             obj_list = [obj for obj in obj_list if obj is not None]
-            # circular import...
-            from django.db.models import Model
-            if not isinstance(obj_list[0], Model):
-                 raise ValueError('Invalid lookup "%s" for prefetch_related. '
-                                  'Lookup leads to a field "%s" that is not a '
-                                  'related field or model instance'
-                                  % (prev_lookup, cur_lookup))
 
         done_objs[r_obj.lookup_path] = obj_list
-    """
-=======
-    # We need to be able to dynamically add to the list of prefetch_related
-    # lookups that we look up (see below).  So we need some book keeping to
-    # ensure we don't do duplicate work.
-    done_lookups = set() # list of lookups like foo__bar__baz
-    done_queries = {}    # dictionary of things like 'foo__bar': [results]
-    related_lookups = list(related_lookups)
-
-    # We may expand related_lookups, so need a loop that allows for that
-    for lookup in related_lookups:
-        if lookup in done_lookups:
-            # We've done exactly this already, skip the whole thing
-            continue
-        done_lookups.add(lookup)
-
-        # Top level, the list of objects to decorate is the the result cache
-        # from the primary QuerySet. It won't be for deeper levels.
-        obj_list = result_cache
-
-        attrs = lookup.split(LOOKUP_SEP)
-        for level, attr in enumerate(attrs):
-            # Prepare main instances
-            if len(obj_list) == 0:
-                break
-
-            good_objects = True
-            for obj in obj_list:
-                if not hasattr(obj, '_prefetched_objects_cache'):
-                    try:
-                        obj._prefetched_objects_cache = {}
-                    except AttributeError:
-                        # Must be in a QuerySet subclass that is not returning
-                        # Model instances, either in Django or 3rd
-                        # party. prefetch_related() doesn't make sense, so quit
-                        # now.
-                        good_objects = False
-                        break
-                else:
-                    # We already did this list
-                    break
-            if not good_objects:
-                break
-
-            # Descend down tree
-            try:
-                rel_obj = getattr(obj_list[0], attr)
-            except AttributeError:
-                raise AttributeError("Cannot find '%s' on %s object, '%s' is an invalid "
-                                     "parameter to prefetch_related()" %
-                                     (attr, obj_list[0].__class__.__name__, lookup))
-
-            can_prefetch = hasattr(rel_obj, 'get_prefetch_query_set')
-            if level == len(attrs) - 1 and not can_prefetch:
-                # Last one, this *must* resolve to a related manager.
-                raise ValueError("'%s' does not resolve to a supported 'many related"
-                                 " manager' for model %s - this is an invalid"
-                                 " parameter to prefetch_related()."
-                                 % (lookup, model.__name__))
-
-            if can_prefetch:
-                # Check we didn't do this already
-                current_lookup = LOOKUP_SEP.join(attrs[0:level+1])
-                if current_lookup in done_queries:
-                    obj_list = done_queries[current_lookup]
-                else:
-                    relmanager = rel_obj
-                    obj_list, additional_prl = prefetch_one_level(obj_list, relmanager, attr)
-                    for f in additional_prl:
-                        new_prl = LOOKUP_SEP.join([current_lookup, f])
-                        related_lookups.append(new_prl)
-                    done_queries[current_lookup] = obj_list
-            else:
-                # Assume we've got some singly related object. We replace
-                # the current list of parent objects with that list.
-                obj_list = [getattr(obj, attr) for obj in obj_list]
-
-                # Filter out 'None' so that we can continue with nullable
-                # relations.
-                obj_list = [obj for obj in obj_list if obj is not None]
-    """
 
 def _prefetch_one_level(instances, relmanager, r_obj):
     """
     Helper function for prefetch_related_objects
 
-    Runs prefetches on all instances using the manager relmanager,
-    assigning results to queryset against instance.attname.
+    Runs prefetches on all instances using the manager relmanager or r_obj's
+    queryset, assigns the results to intstance against instance.attname.
 
     The prefetched objects are returned, along with any additional
     prefetches that must be done due to prefetch_related fields
-    found from default managers.
+    found from default manager or the r_obj's queryset.
     """
     rel_qs, rel_obj_attr, instance_attr = \
         relmanager.get_prefetch_query_set(instances, custom_qs=r_obj.qs)
+
     # We have to handle the possibility that the default manager itself added
     # prefetch_related fields to the QuerySet we just got back. We don't want to
     # trigger the prefetch_related functionality by evaluating the query.
-    # Rather, we need to merge in the prefetch_related fields.
+    # Rather, we need to merge them into the calling query's prefetch.
     additional_prl = rel_qs._prefetch_related_lookups
     if additional_prl:
         # Don't need to clone because the manager should have given us a fresh
@@ -1779,6 +1720,8 @@ def _prefetch_one_level(instances, relmanager, r_obj):
         rel_qs._prefetch_related_lookups = []
     all_related_objects = list(rel_qs)
 
+    # Consturct a cache {join field's value: [related objects]}. In other
+    # words, we are doing a hash join.
     rel_obj_cache = {}
     for rel_obj in all_related_objects:
         rel_attr_val = getattr(rel_obj, rel_obj_attr)
@@ -1790,6 +1733,7 @@ def _prefetch_one_level(instances, relmanager, r_obj):
         instance_attr_val = getattr(obj, instance_attr)
         results = rel_obj_cache.get(instance_attr_val, [])
         if not r_obj.to_attr:
+            # fetch to related manager if there is no defined to_attr
             qs = getattr(obj, r_obj.attname).all()
             qs._result_cache = results
             qs._prefetch_done = True

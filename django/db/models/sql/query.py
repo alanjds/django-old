@@ -268,7 +268,10 @@ class Query(object):
         obj.select_for_update_nowait = self.select_for_update_nowait
         obj.select_related = self.select_related
         obj.related_select_cols = []
-        obj.aggregates = copy.deepcopy(self.aggregates, memo=memo)
+        if self.aggregates:
+            obj.aggregates = copy.deepcopy(self.aggregates, memo=memo)
+        else:
+            obj.aggregates = SortedDict()
         if self.aggregate_select_mask is None:
             obj.aggregate_select_mask = None
         else:
@@ -291,7 +294,7 @@ class Query(object):
             obj._extra_select_cache = self._extra_select_cache.copy()
         obj.extra_tables = self.extra_tables
         obj.extra_order_by = self.extra_order_by
-        obj.deferred_loading = copy.deepcopy(self.deferred_loading, memo=memo)
+        obj.deferred_loading = self.deferred_loading[0].copy(), self.deferred_loading[1]
         if self.filter_is_sticky and self.used_aliases:
             obj.used_aliases = self.used_aliases.copy()
         else:

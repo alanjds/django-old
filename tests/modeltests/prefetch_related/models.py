@@ -119,3 +119,47 @@ class TaggedItem(models.Model):
 class Bookmark(models.Model):
     url = models.URLField()
     tags = generic.GenericRelation(TaggedItem)
+
+
+## Models for lookup ordering tests
+
+
+class House(models.Model):
+    address = models.CharField(max_length=255)
+
+    class Meta:
+        ordering = ['id']
+
+class Room(models.Model):
+    name = models.CharField(max_length=50)
+    house = models.ForeignKey(House, related_name='rooms')
+
+    class Meta:
+        ordering = ['id']
+
+
+class Person(models.Model):
+    name = models.CharField(max_length=50)
+    houses = models.ManyToManyField(House, related_name='occupants')
+
+    @property
+    def primary_house(self):
+        # Assume business logic forces every person to have at least one house.
+        return sorted(self.houses.all(), key=lambda house: -house.rooms.count())[0]
+
+    class Meta:
+        ordering = ['id']
+
+
+## Models for nullable FK tests
+
+class Employee(models.Model):
+    name = models.CharField(max_length=50)
+    boss = models.ForeignKey('self', null=True,
+                             related_name='serfs')
+
+    def __unicode__(self):
+        return self.name
+
+    class Meta:
+        ordering = ['id']

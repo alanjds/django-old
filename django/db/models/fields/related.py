@@ -432,8 +432,22 @@ class ForeignRelatedObjectsDescriptor(object):
                 self.model = rel_model
 
             def get_query_set(self):
-                db = self._db or router.db_for_read(self.model, instance=self.instance)
-                return super(RelatedManager, self).get_query_set().using(db).filter(**(self.core_filters))
+                try:
+                    return self.instance._prefetched_objects_cache[rel_field.related_query_name()]
+                except (AttributeError, KeyError):
+                    db = self._db or router.db_for_read(self.model, instance=self.instance)
+                    return super(RelatedManager, self).get_query_set().using(db).filter(**self.core_filters)
+
+            def get_prefetch_query_set(self, instances):
+                """
+                Return a queryset that does the bulk lookup needed
+                by prefetch_related functionality.
+                """
+                db = self._db or router.db_for_read(self.model)
+                query = {'%s__%s__in' % (rel_field.name, attname):
+                             [getattr(obj, attname) for obj in instances]}
+                qs = super(RelatedManager, self).get_query_set().using(db).filter(**query)
+                return (qs, rel_field.get_attname(), attname)
 
             def get_prefetch_query_set(self, instances, custom_qs=None):
                 """
@@ -522,8 +536,41 @@ def create_many_related_manager(superclass, rel):
                 raise ValueError("%r instance needs to have a primary key value before a many-to-many relationship can be used." % instance.__class__.__name__)
 
         def get_query_set(self):
-            db = self._db or router.db_for_read(self.instance.__class__, instance=self.instance)
-            return super(ManyRelatedManager, self).get_query_set().using(db)._next_is_sticky().filter(**(self.core_filters))
+            try:
+                return self.instance._prefetched_objects_cache[self.prefetch_cache_name]
+            except (AttributeError, KeyError):
+                db = self._db or router.db_for_read(self.instance.__class__, instance=self.instance)
+                return super(ManyRelatedManager, self).get_query_set().using(db)._next_is_sticky().filter(**self.core_filters)
+
+        def get_prefetch_query_set(self, instances):
+            """
+            Returns a tuple:
+            (queryset of instances of self.model that are related to passed in instances
+             attr of returned instances needed for matching
+             attr of passed in instances needed for matching)
+            """
+            from django.db import connections
+            db = self._db or router.db_for_read(self.model)
+            query = {'%s__pk__in' % self.query_field_name:
+                         [obj._get_pk_val() for obj in instances]}
+            qs = super(ManyRelatedManager, self).get_query_set().using(db)._next_is_sticky().filter(**query)
+
+            # M2M: need to annotate the query in order to get the primary model
+            # that the secondary model was actually related to. We know that
+            # there will already be a join on the join table, so we can just add
+            # the select.
+
+            # For non-autocreated 'through' models, can't assume we are
+            # dealing with PK values.
+            fk = self.through._meta.get_field(self.source_field_name)
+            source_col = fk.column
+            join_table = self.through._meta.db_table
+            connection = connections[db]
+            qn = connection.ops.quote_name
+            qs = qs.extra(select={'_prefetch_related_val':
+                                      '%s.%s' % (qn(join_table), qn(source_col))})
+            select_attname = fk.rel.get_related_field().get_attname()
+            return (qs, '_prefetch_related_val', select_attname)
 
         def get_prefetch_query_set(self, instances, custom_qs=None):
             """

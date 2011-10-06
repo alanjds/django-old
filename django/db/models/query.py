@@ -40,7 +40,7 @@ class QuerySet(object):
         self._iter = None
         self._sticky_filter = False
         self._for_write = False
-        self._prefetch_related = []
+        self._prefetch_related_lookups = []
         self._prefetch_done = False
 
     ########################
@@ -87,12 +87,12 @@ class QuerySet(object):
                 self._result_cache = list(self.iterator())
         elif self._iter:
             self._result_cache.extend(self._iter)
-        if self._prefetch_related and not self._prefetch_done:
+        if self._prefetch_related_lookups and not self._prefetch_done:
             self._prefetch_related_objects()
         return len(self._result_cache)
 
     def __iter__(self):
-        if self._prefetch_related:
+        if self._prefetch_related_lookups and not self._prefetch_done:
             # We need all the results in order to be able to do the prefetch
             # in one go. To minimize code duplication, we use the __len__
             # code path which also forces this, and also does the prefetch
@@ -120,7 +120,7 @@ class QuerySet(object):
                 self._fill_cache()
 
     def __nonzero__(self):
-        if self._prefetch_related:
+        if self._prefetch_related_lookups and not self._prefetch_done:
             # We need all the results in order to be able to do the prefetch
             # in one go. To minimize code duplication, we use the __len__
             # code path which also forces this, and also does the prefetch
@@ -285,12 +285,13 @@ class QuerySet(object):
         db = self.db
         model = self.model
         compiler = self.query.get_compiler(using=db)
+        if fill_cache:
+            klass_info = get_klass_info(model, max_depth=max_depth,
+                                        requested=requested, only_load=only_load)
         for row in compiler.results_iter():
             if fill_cache:
-                obj, _ = get_cached_row(model, row,
-                            index_start, using=db, max_depth=max_depth,
-                            requested=requested, offset=len(aggregate_select),
-                            only_load=only_load)
+                obj, _ = get_cached_row(row, index_start, db, klass_info,
+                                        offset=len(aggregate_select))
             else:
                 if skip:
                     row_data = row[index_start:aggregate_start]
@@ -548,7 +549,7 @@ class QuerySet(object):
 
     def _prefetch_related_objects(self):
         # This method can only be called once the result cache has been filled.
-        prefetch_related_objects(self._result_cache, self._prefetch_related)
+        prefetch_related_objects(self._result_cache, self._prefetch_related_lookups)
         self._prefetch_done = True
 
     ##################################################
@@ -674,7 +675,7 @@ class QuerySet(object):
             obj.query.max_depth = depth
         return obj
 
-    def prefetch_related(self, *fields):
+    def prefetch_related(self, *lookups):
         """
         Returns a new QuerySet instance that will prefetch Many-To-One
         and Many-To-Many related objects when the QuerySet is evaluated.
@@ -693,14 +694,14 @@ class QuerySet(object):
         documentation of R objects.
 
         When prefetch_related() is called more than once, the list of fields to
-        prefetch is added to. If prefetch_related() is called with argument None
+        prefetch is added to. If prefetch_related(None) is called, the
         the list is cleared.
         """
         c = self._clone()
-        if fields == (None,):
-            c._prefetch_related = []
+        if lookups == (None,):
+            c._prefetch_related_lookups = []
         else:
-            c._prefetch_related += list(fields)
+            c._prefetch_related_lookups.extend(lookups)
         return c
 
     def dup_select_related(self, other):
@@ -852,7 +853,7 @@ class QuerySet(object):
             query.filter_is_sticky = True
         c = klass(model=self.model, query=query, using=self._db)
         c._for_write = self._for_write
-        c._prefetch_related = self._prefetch_related[:]
+        c._prefetch_related_lookups = self._prefetch_related_lookups[:]
         c.__dict__.update(kwargs)
         if setup and hasattr(c, '_setup_query'):
             c._setup_query()
@@ -917,6 +918,7 @@ class QuerySet(object):
     # When used as part of a nested query, a queryset will never be an "always
     # empty" result.
     value_annotation = True
+
 
 class ValuesQuerySet(QuerySet):
     def __init__(self, *args, **kwargs):
@@ -1046,6 +1048,7 @@ class ValuesQuerySet(QuerySet):
             raise TypeError('Cannot use a multi-field %s as a filter value.'
                     % self.__class__.__name__)
         return self
+
 
 class ValuesListQuerySet(ValuesQuerySet):
     def iterator(self):
@@ -1229,22 +1232,16 @@ class EmptyQuerySet(QuerySet):
     # situations).
     value_annotation = False
 
-
-def get_cached_row(klass, row, index_start, using, max_depth=0, cur_depth=0,
-                   requested=None, offset=0, only_load=None, local_only=False):
+def get_klass_info(klass, max_depth=0, cur_depth=0, requested=None,
+                   only_load=None, local_only=False):
     """
-    Helper function that recursively returns an object with the specified
-    related attributes already populated.
-
-    This method may be called recursively to populate deep select_related()
-    clauses.
+    Helper function that recursively returns an information for a klass, to be
+    used in get_cached_row.  It exists just to compute this information only
+    once for entire queryset. Otherwise it would be computed for each row, which
+    leads to poor perfomance on large querysets.
 
     Arguments:
      * klass - the class to retrieve (and instantiate)
-     * row - the row of data returned by the database cursor
-     * index_start - the index of the row at which data for this
-       object is known to start
-     * using - the database alias on which the query is being executed.
      * max_depth - the maximum depth to which a select_related()
        relationship should be explored.
      * cur_depth - the current depth in the select_related() tree.
@@ -1253,20 +1250,16 @@ def get_cached_row(klass, row, index_start, using, max_depth=0, cur_depth=0,
        that is to be retrieved. keys are field names; values are
        dictionaries describing the keys on that related object that
        are themselves to be select_related().
-     * offset - the number of additional fields that are known to
-       exist in `row` for `klass`. This usually means the number of
-       annotated results on `klass`.
      * only_load - if the query has had only() or defer() applied,
        this is the list of field names that will be returned. If None,
        the full field list for `klass` can be assumed.
-     * local_only - Only populate local fields. This is used when building
+     * local_only - Only populate local fields. This is used when
        following reverse select-related relations
     """
     if max_depth and requested is None and cur_depth > max_depth:
         # We've recursed deeply enough; stop now.
         return None
 
-    restricted = requested is not None
     if only_load:
         load_fields = only_load.get(klass)
         # When we create the object, we will also be creating populating
@@ -1278,6 +1271,7 @@ def get_cached_row(klass, row, index_start, using, max_depth=0, cur_depth=0,
                 load_fields.update(fields)
     else:
         load_fields = None
+
     if load_fields:
         # Handle deferred fields.
         skip = set()
@@ -1292,52 +1286,97 @@ def get_cached_row(klass, row, index_start, using, max_depth=0, cur_depth=0,
                 init_list.append(field.attname)
         # Retrieve all the requested fields
         field_count = len(init_list)
-        fields = row[index_start : index_start + field_count]
-        # If all the select_related columns are None, then the related
-        # object must be non-existent - set the relation to None.
-        # Otherwise, construct the related object.
-        if fields == (None,) * field_count:
-            obj = None
-        elif skip:
+        if skip:
             klass = deferred_class_factory(klass, skip)
-            obj = klass(**dict(zip(init_list, fields)))
+            field_names = init_list
         else:
-            obj = klass(*fields)
-
+            field_names = ()
     else:
         # Load all fields on klass
-        if local_only:
+
+        # We trying to not populate field_names variable for perfomance reason.
+        # If field_names variable is set, it is used to instantiate desired fields,
+        # by passing **dict(zip(field_names, fields)) as kwargs to Model.__init__ method.
+        # But kwargs version of Model.__init__ is slower, so we should avoid using
+        # it when it is not really neccesary.
+        if local_only and len(klass._meta.local_fields) != len(klass._meta.fields):
+            field_count = len(klass._meta.local_fields)
             field_names = [f.attname for f in klass._meta.local_fields]
         else:
-            field_names = [f.attname for f in klass._meta.fields]
-        field_count = len(field_names)
-        fields = row[index_start : index_start + field_count]
-        # If all the select_related columns are None, then the related
-        # object must be non-existent - set the relation to None.
-        # Otherwise, construct the related object.
-        if fields == (None,) * field_count:
-            obj = None
-        else:
+            field_count = len(klass._meta.fields)
+            field_names = ()
+
+    restricted = requested is not None
+
+    related_fields = []
+    for f in klass._meta.fields:
+        if select_related_descend(f, restricted, requested):
+            if restricted:
+                next = requested[f.name]
+            else:
+                next = None
+            klass_info = get_klass_info(f.rel.to, max_depth=max_depth, cur_depth=cur_depth+1,
+                                        requested=next, only_load=only_load)
+            related_fields.append((f, klass_info))
+
+    reverse_related_fields = []
+    if restricted:
+        for o in klass._meta.get_all_related_objects():
+            if o.field.unique and select_related_descend(o.field, restricted, requested, reverse=True):
+                next = requested[o.field.related_query_name()]
+                klass_info = get_klass_info(o.model, max_depth=max_depth, cur_depth=cur_depth+1,
+                                            requested=next, only_load=only_load, local_only=True)
+                reverse_related_fields.append((o.field, klass_info))
+
+    return klass, field_names, field_count, related_fields, reverse_related_fields
+
+
+def get_cached_row(row, index_start, using,  klass_info, offset=0):
+    """
+    Helper function that recursively returns an object with the specified
+    related attributes already populated.
+
+    This method may be called recursively to populate deep select_related()
+    clauses.
+
+    Arguments:
+         * row - the row of data returned by the database cursor
+         * index_start - the index of the row at which data for this
+           object is known to start
+         * offset - the number of additional fields that are known to
+           exist in row for `klass`. This usually means the number of
+           annotated results on `klass`.
+        * using - the database alias on which the query is being executed.
+         * klass_info - result of the get_klass_info function
+    """
+    if klass_info is None:
+        return None
+    klass, field_names, field_count, related_fields, reverse_related_fields = klass_info
+
+    fields = row[index_start : index_start + field_count]
+    # If all the select_related columns are None, then the related
+    # object must be non-existent - set the relation to None.
+    # Otherwise, construct the related object.
+    if fields == (None,) * field_count:
+        obj = None
+    else:
+        if field_names:
             obj = klass(**dict(zip(field_names, fields)))
+        else:
+            obj = klass(*fields)
 
     # If an object was retrieved, set the database state.
     if obj:
         obj._state.db = using
         obj._state.adding = False
 
+    # Instantiate related fields
     index_end = index_start + field_count + offset
     # Iterate over each related object, populating any
     # select_related() fields
-    for f in klass._meta.fields:
-        if not select_related_descend(f, restricted, requested):
-            continue
-        if restricted:
-            next = requested[f.name]
-        else:
-            next = None
+    for f, klass_info in related_fields:
         # Recursively retrieve the data for the related object
-        cached_row = get_cached_row(f.rel.to, row, index_end, using,
-                max_depth, cur_depth+1, next, only_load=only_load)
+        cached_row = get_cached_row(row, index_end, using, klass_info)
         # If the recursive descent found an object, populate the
         # descriptor caches relevant to the object
         if cached_row:
@@ -1354,45 +1393,35 @@ def get_cached_row(klass, row, index_start, using, max_depth=0, cur_depth=0,
     # Now do the same, but for reverse related objects.
     # Only handle the restricted case - i.e., don't do a depth
     # descent into reverse relations unless explicitly requested
-    if restricted:
-        related_fields = [
-            (o.field, o.model)
-            for o in klass._meta.get_all_related_objects()
-            if o.field.unique
-        ]
-        for f, model in related_fields:
-            if not select_related_descend(f, restricted, requested, reverse=True):
-                continue
-            next = requested[f.related_query_name()]
-            # Recursively retrieve the data for the related object
-            cached_row = get_cached_row(model, row, index_end, using,
-                max_depth, cur_depth+1, next, only_load=only_load, local_only=True)
-            # If the recursive descent found an object, populate the
-            # descriptor caches relevant to the object
-            if cached_row:
-                rel_obj, index_end = cached_row
-                if obj is not None:
-                    # If the field is unique, populate the
-                    # reverse descriptor cache
-                    setattr(obj, f.related.get_cache_name(), rel_obj)
-                if rel_obj is not None:
-                    # If the related object exists, populate
-                    # the descriptor cache.
-                    setattr(rel_obj, f.get_cache_name(), obj)
-                    # Now populate all the non-local field values
-                    # on the related object
-                    for rel_field,rel_model in rel_obj._meta.get_fields_with_model():
-                        if rel_model is not None:
-                            setattr(rel_obj, rel_field.attname, getattr(obj, rel_field.attname))
-                            # populate the field cache for any related object
-                            # that has already been retrieved
-                            if rel_field.rel:
-                                try:
-                                    cached_obj = getattr(obj, rel_field.get_cache_name())
-                                    setattr(rel_obj, rel_field.get_cache_name(), cached_obj)
-                                except AttributeError:
-                                    # Related object hasn't been cached yet
-                                    pass
+    for f, klass_info in reverse_related_fields:
+        # Recursively retrieve the data for the related object
+        cached_row = get_cached_row(row, index_end, using, klass_info)
+        # If the recursive descent found an object, populate the
+        # descriptor caches relevant to the object
+        if cached_row:
+            rel_obj, index_end = cached_row
+            if obj is not None:
+                # If the field is unique, populate the
+                # reverse descriptor cache
+                setattr(obj, f.related.get_cache_name(), rel_obj)
+            if rel_obj is not None:
+                # If the related object exists, populate
+                # the descriptor cache.
+                setattr(rel_obj, f.get_cache_name(), obj)
+                # Now populate all the non-local field values
+                # on the related object
+                for rel_field, rel_model in rel_obj._meta.get_fields_with_model():
+                    if rel_model is not None:
+                        setattr(rel_obj, rel_field.attname, getattr(obj, rel_field.attname))
+                        # populate the field cache for any related object
+                        # that has already been retrieved
+                        if rel_field.rel:
+                            try:
+                                cached_obj = getattr(obj, rel_field.get_cache_name())
+                                setattr(rel_obj, rel_field.get_cache_name(), cached_obj)
+                            except AttributeError:
+                                # Related object hasn't been cached yet
+                                pass
     return obj, index_end
 
 
@@ -1530,6 +1559,7 @@ class RawQuerySet(object):
                 self._model_fields[converter(column)] = field
         return self._model_fields
 
+
 def insert_query(model, objs, fields, return_id=False, raw=False, using=None):
     """
     Inserts a new record for the given model. This provides an interface to
@@ -1568,8 +1598,10 @@ def convert_prefetch(fields, done_lookups, prefix=None):
         ordered_r_objs.extend(needed_r_objs)
     return ordered_r_objs
 
-def prefetch_related_objects(result_cache, fields):
+def prefetch_related_objects(result_cache, related_lookups):
     """
+    Helper function for prefetch_related functionality
+    
     Populates prefetched objects caches for a list of results
     from a QuerySet
     """
@@ -1580,7 +1612,7 @@ def prefetch_related_objects(result_cache, fields):
     model = result_cache[0].__class__
 
     done_lookups = set()
-    ordered_r_objs = convert_prefetch(fields, done_lookups)
+    ordered_r_objs = convert_prefetch(related_lookups, done_lookups)
     
     # the upmost level has no lookup path, hence the ''
     done_objs = {'': result_cache}
@@ -1615,7 +1647,8 @@ def prefetch_related_objects(result_cache, fields):
         if hasattr(rel_obj, 'get_prefetch_query_set'):
             obj_list, additional_prf = _prefetch_one_level(obj_list, rel_obj, r_obj)
             ordered_r_objs.extend(
-                convert_prefetch(additional_prf, done_lookups, prefix=r_obj.lookup_path))
+                convert_prefetch(additional_prf, done_lookups,
+                                 prefix=r_obj.lookup_path))
             done_objs[r_obj.lookup_path] = obj_list
         else:
             if is_final:
@@ -1625,16 +1658,106 @@ def prefetch_related_objects(result_cache, fields):
                      (prev_lookup, cur_lookup))
             # Assume we've got some singly related object. We replace
             # the current list of parent objects with that list.
-            obj_list = [getattr(obj, cur_lookup) for obj in obj_list]
+            obj_list = [getattr(obj, cur_lookup) for obj in obj_list if obj is not None]
+            
+            # Filter out 'None' so that we can continue with nullable
+            # relations.
+            obj_list = [obj for obj in obj_list if obj is not None]
             # circular import...
             from django.db.models import Model
             if not isinstance(obj_list[0], Model):
-                 raise ValueError('Invalid lookup %s for prefetch_related. Lookup leads to a field %s that is not a related field' % (prev_lookup, cur_lookup))
-        done_objs[r_obj.lookup_path] = obj_list
+                 raise ValueError('Invalid lookup "%s" for prefetch_related. '
+                                  'Lookup leads to a field "%s" that is not a '
+                                  'related field or model instance'
+                                  % (prev_lookup, cur_lookup))
 
+        done_objs[r_obj.lookup_path] = obj_list
+    """
+=======
+    # We need to be able to dynamically add to the list of prefetch_related
+    # lookups that we look up (see below).  So we need some book keeping to
+    # ensure we don't do duplicate work.
+    done_lookups = set() # list of lookups like foo__bar__baz
+    done_queries = {}    # dictionary of things like 'foo__bar': [results]
+    related_lookups = list(related_lookups)
+
+    # We may expand related_lookups, so need a loop that allows for that
+    for lookup in related_lookups:
+        if lookup in done_lookups:
+            # We've done exactly this already, skip the whole thing
+            continue
+        done_lookups.add(lookup)
+
+        # Top level, the list of objects to decorate is the the result cache
+        # from the primary QuerySet. It won't be for deeper levels.
+        obj_list = result_cache
+
+        attrs = lookup.split(LOOKUP_SEP)
+        for level, attr in enumerate(attrs):
+            # Prepare main instances
+            if len(obj_list) == 0:
+                break
+
+            good_objects = True
+            for obj in obj_list:
+                if not hasattr(obj, '_prefetched_objects_cache'):
+                    try:
+                        obj._prefetched_objects_cache = {}
+                    except AttributeError:
+                        # Must be in a QuerySet subclass that is not returning
+                        # Model instances, either in Django or 3rd
+                        # party. prefetch_related() doesn't make sense, so quit
+                        # now.
+                        good_objects = False
+                        break
+                else:
+                    # We already did this list
+                    break
+            if not good_objects:
+                break
+
+            # Descend down tree
+            try:
+                rel_obj = getattr(obj_list[0], attr)
+            except AttributeError:
+                raise AttributeError("Cannot find '%s' on %s object, '%s' is an invalid "
+                                     "parameter to prefetch_related()" %
+                                     (attr, obj_list[0].__class__.__name__, lookup))
+
+            can_prefetch = hasattr(rel_obj, 'get_prefetch_query_set')
+            if level == len(attrs) - 1 and not can_prefetch:
+                # Last one, this *must* resolve to a related manager.
+                raise ValueError("'%s' does not resolve to a supported 'many related"
+                                 " manager' for model %s - this is an invalid"
+                                 " parameter to prefetch_related()."
+                                 % (lookup, model.__name__))
+
+            if can_prefetch:
+                # Check we didn't do this already
+                current_lookup = LOOKUP_SEP.join(attrs[0:level+1])
+                if current_lookup in done_queries:
+                    obj_list = done_queries[current_lookup]
+                else:
+                    relmanager = rel_obj
+                    obj_list, additional_prl = prefetch_one_level(obj_list, relmanager, attr)
+                    for f in additional_prl:
+                        new_prl = LOOKUP_SEP.join([current_lookup, f])
+                        related_lookups.append(new_prl)
+                    done_queries[current_lookup] = obj_list
+            else:
+                # Assume we've got some singly related object. We replace
+                # the current list of parent objects with that list.
+                obj_list = [getattr(obj, attr) for obj in obj_list]
+
+                # Filter out 'None' so that we can continue with nullable
+                # relations.
+                obj_list = [obj for obj in obj_list if obj is not None]
+    """
 
 def _prefetch_one_level(instances, relmanager, r_obj):
     """
+    Helper function for prefetch_related_objects
+
     Runs prefetches on all instances using the manager relmanager,
     assigning results to queryset against instance.attname.
 
@@ -1648,8 +1771,27 @@ def _prefetch_one_level(instances, relmanager, r_obj):
     # prefetch_related fields to the QuerySet we just got back. We don't want to
     # trigger the prefetch_related functionality by evaluating the query.
     # Rather, we need to merge in the prefetch_related fields.
-    additional_prf = rel_qs._prefetch_related
+    additional_prf = rel_qs._prefetch_related_lookups
     rel_qs._prefetch_done = True
+    """
+=======
+    prefetches that must be done due to prefetch_related lookups
+    found from default managers.
+    "" "
+    rel_qs, rel_obj_attr, instance_attr = relmanager.get_prefetch_query_set(instances)
+    # We have to handle the possibility that the default manager itself added
+    # prefetch_related lookups to the QuerySet we just got back. We don't want to
+    # trigger the prefetch_related functionality by evaluating the query.
+    # Rather, we need to merge in the prefetch_related lookups.
+    additional_prl = getattr(rel_qs, '_prefetch_related_lookups', [])
+    if additional_prl:
+        # Don't need to clone because the manager should have given us a fresh
+        # instance, so we access an internal instead of using public interface
+        # for performance reasons.
+        rel_qs._prefetch_related_lookups = []
+
+>>>>>>> master
+    """
     all_related_objects = list(rel_qs)
 
     rel_obj_cache = {}
@@ -1670,3 +1812,15 @@ def _prefetch_one_level(instances, relmanager, r_obj):
         else:
             setattr(obj, r_obj.to_attr, results)
     return all_related_objects, additional_prf
+    """
+=======
+        qs = getattr(obj, attname).all()
+        instance_attr_val = getattr(obj, instance_attr)
+        qs._result_cache = rel_obj_cache.get(instance_attr_val, [])
+        # We don't want the individual qs doing prefetch_related now, since we
+        # have merged this into the current work.
+        qs._prefetch_done = True
+        obj._prefetched_objects_cache[attname] = qs
+    return all_related_objects, additional_prl
+>>>>>>> master
+    """

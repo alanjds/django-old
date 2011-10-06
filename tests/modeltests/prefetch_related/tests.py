@@ -1,10 +1,14 @@
+from __future__ import with_statement
+
 from django.contrib.contenttypes.models import ContentType
 from django.test import TestCase
 from django.utils import unittest
 
 from models import (Author, Book, Reader, Qualification, Teacher, Department,
                     TaggedItem, Bookmark, AuthorAddress, FavoriteAuthors,
-                    AuthorWithAge, BookWithYear)
+                    AuthorWithAge, BookWithYear, Person, House, Room,
+                    Employee)
+
 
 class PrefetchRelatedTests(TestCase):
 
@@ -76,6 +80,16 @@ class PrefetchRelatedTests(TestCase):
             lists = [list(b.first_time_authors.all())
                      for b in qs]
 
+    def test_count(self):
+        with self.assertNumQueries(2):
+            qs = Book.objects.prefetch_related('first_time_authors')
+            [b.first_time_authors.count() for b in qs]
+
+    def test_exists(self):
+        with self.assertNumQueries(2):
+            qs = Book.objects.prefetch_related('first_time_authors')
+            [b.first_time_authors.exists() for b in qs]
+
     def test_clear(self):
         """
         Test that we can clear the behavior by calling prefetch_related()
@@ -144,7 +158,6 @@ class PrefetchRelatedTests(TestCase):
         Test we can follow an m2m relation after a relation like ForeignKey
         that doesn't have many objects
         """
-
         with self.assertNumQueries(2):
             qs = Author.objects.select_related('first_book').prefetch_related('first_book__read_by')
             lists = [[unicode(r) for r in a.first_book.read_by.all()]
@@ -154,45 +167,20 @@ class PrefetchRelatedTests(TestCase):
                                      [u"Amy"],
                                      [u"Amy", "Belinda"]])
 
-    def test_reuse(self):
-        # Check re-use of objects.
-        qs1 = Reader.objects.all()
-        qs2 = Reader.objects.prefetch_related('books_read__first_time_authors')
-
-        authors1 = [a for r in qs1
-                    for b in r.books_read.all()
-                    for a in b.first_time_authors.all()]
-        authors2 = [a for r in qs2
-                    for b in r.books_read.all()
-                    for a in b.first_time_authors.all()]
-
-        # The second prefetch_related lookup is a reverse foreign key. This
-        # means the query for it can only be something like
-        # "first_time_authors__pk__in = [...]" and cannot return more rows then
-        # the number of Author objects in the database.  This means that these
-        # objects will be reused (since in our data we've arranged for there
-        # len(authors1) > Author.objects.count())
-
-        total_authors = Author.objects.count()
-        self.assertEqual(len(authors1), len(authors2))
-        self.assertTrue(len(authors1) > total_authors)
-        self.assertTrue(len(set(map(id, authors1))) > len(set(map(id, authors2))))
-        self.assertEqual(total_authors, len(set(map(id, authors2))))
-
     def test_attribute_error(self):
         qs = Reader.objects.all().prefetch_related('books_read__xyz')
         with self.assertRaises(AttributeError) as cm:
             list(qs)
 
-        self.assertTrue('prefetch_related' in cm.exception.message)
+        self.assertTrue('prefetch_related' in str(cm.exception))
 
     def test_invalid_final_lookup(self):
         qs = Book.objects.prefetch_related('authors__first_book')
         with self.assertRaises(ValueError) as cm:
             list(qs)
 
-        self.assertTrue('prefetch_related' in cm.exception.message)
-        self.assertTrue("first_book" in cm.exception.message)
+        self.assertTrue('prefetch_related' in str(cm.exception))
+        self.assertTrue("first_book" in str(cm.exception))
 
 
 class DefaultManagerTests(TestCase):
@@ -280,6 +268,7 @@ class GenericRelationTests(TestCase):
 
 
 class MultiTableInheritanceTest(TestCase):
+
     def setUp(self):
         self.book1 = BookWithYear.objects.create(
             title="Poems", published_year=2010)
@@ -324,10 +313,11 @@ class MultiTableInheritanceTest(TestCase):
     def test_parent_link_prefetch(self):
         with self.assertRaises(ValueError) as cm:
             qs = list(AuthorWithAge.objects.prefetch_related('author'))
-        self.assertTrue('prefetch_related' in cm.exception.message)
+        self.assertTrue('prefetch_related' in str(cm.exception))
 
 
 class ForeignKeyToFieldTest(TestCase):
+
     def setUp(self):
         self.book = Book.objects.create(title="Poems")
         self.author1 = Author.objects.create(name='Jane', first_book=self.book)
@@ -365,3 +355,64 @@ class ForeignKeyToFieldTest(TestCase):
                     ([unicode(self.author1)],[unicode(self.author2)])
                 ]
             )
+
+
+class LookupOrderingTest(TestCase):
+    """
+    Test cases that demonstrate that ordering of lookups is important, and
+    ensure it is preserved.
+    """
+
+    def setUp(self):
+        self.person1 = Person.objects.create(name="Joe")
+        self.person2 = Person.objects.create(name="Mary")
+
+        self.house1 = House.objects.create(address="123 Main St")
+        self.house2 = House.objects.create(address="45 Side St")
+        self.house3 = House.objects.create(address="6 Downing St")
+        self.house4 = House.objects.create(address="7 Regents St")
+
+        self.room1_1 = Room.objects.create(name="Dining room", house=self.house1)
+        self.room1_2 = Room.objects.create(name="Lounge", house=self.house1)
+        self.room1_3 = Room.objects.create(name="Kitchen", house=self.house1)
+
+        self.room2_1 = Room.objects.create(name="Dining room", house=self.house2)
+        self.room2_2 = Room.objects.create(name="Lounge", house=self.house2)
+
+        self.room3_1 = Room.objects.create(name="Dining room", house=self.house3)
+        self.room3_2 = Room.objects.create(name="Lounge", house=self.house3)
+        self.room3_3 = Room.objects.create(name="Kitchen", house=self.house3)
+
+        self.room4_1 = Room.objects.create(name="Dining room", house=self.house4)
+        self.room4_2 = Room.objects.create(name="Lounge", house=self.house4)
+
+        self.person1.houses.add(self.house1, self.house2)
+        self.person2.houses.add(self.house3, self.house4)
+
+    def test_order(self):
+        with self.assertNumQueries(4):
+            # The following two queries must be done in the same order as written,
+            # otherwise 'primary_house' will cause non-prefetched lookups
+            qs = Person.objects.prefetch_related('houses__rooms',
+                                                 'primary_house__occupants')
+            [list(p.primary_house.occupants.all()) for p in qs]
+
+
+class NullableTest(TestCase):
+
+    def setUp(self):
+        boss = Employee.objects.create(name="Peter")
+        worker1 = Employee.objects.create(name="Joe", boss=boss)
+        worker2 = Employee.objects.create(name="Angela", boss=boss)
+
+    def test_traverse_nullable(self):
+        with self.assertNumQueries(2):
+            qs = Employee.objects.select_related('boss').prefetch_related('boss__serfs')
+            co_serfs = [list(e.boss.serfs.all()) if e.boss is not None else []
+                        for e in qs]
+
+        qs2 =  Employee.objects.select_related('boss')
+        co_serfs2 =  [list(e.boss.serfs.all()) if e.boss is not None else []
+                        for e in qs2]
+
+        self.assertEqual(co_serfs, co_serfs2)

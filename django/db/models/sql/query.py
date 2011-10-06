@@ -1066,9 +1066,7 @@ class Query(object):
 
         for alias, aggregate in self.aggregates.items():
             if alias in (parts[0], LOOKUP_SEP.join(parts)):
-                entry = self.where_class()
-                entry.add((aggregate, lookup_type, value), AND)
-                self.having.add(entry, connector)
+                self.having.add((aggregate, lookup_type, value), connector)
                 return
 
         opts = self.get_meta()

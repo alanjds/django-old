@@ -50,7 +50,14 @@ class Node(object):
     empty = classmethod(empty)
 
 
-    def clone(self, memo={}):
+    def clone(self, memo=None):
+        """
+        Clones the whole tree, not just the subtree. We have loops in
+        the tree due to keeping both parent and child links. Because
+        of this, we must keep a memo of objects already copied.
+        """
+        if memo is None:
+            memo = {}
         if self in memo:
             return memo[self]
         obj = self.empty()

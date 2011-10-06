@@ -499,28 +499,18 @@ class Query(object):
                 if self.alias_refcount.get(alias) or rhs.alias_refcount.get(alias):
                     self.promote_alias(alias, True)
 
-        # Now relabel a copy of the rhs where-clause and add it to the current
-        # one.
-        if rhs.where:
-            w = copy.deepcopy(rhs.where)
-            w.relabel_aliases(change_map)
-            if not self.where:
-                # Since 'self' matches everything, add an explicit "include
-                # everything" where-constraint so that connections between the
-                # where clauses won't exclude valid results.
-                self.where.add(EverythingNode(), AND)
-        elif self.where:
-            # rhs has an empty where clause.
-            w = self.where_class()
-            w.add(EverythingNode(), AND)
+        if connector == OR and (not self.where or not rhs.where):
+            # One of the two sides matches everything and the connector is OR.
+            # This means the new where condition must match everything.
+            self.where = self.where_class()
         else:
-            w = self.where_class()
-
-        self.where = self.where_class([self.where, w], connector)
-        self.where.prune_tree(recurse=True)
-        # the root node's connector must always be AND
-        if self.where.connector == OR:
-            self.where = self.where_class([self.where])
+            rhs_where = rhs.where.clone()
+            rhs_where.relabel_aliases(change_map)
+            self.where = self.where_class([self.where, rhs_where], connector)
+            # the root node's connector must always be AND
+            if self.where.connector == OR:
+                self.where = self.where_class([self.where])
+            self.where.prune_tree(recurse=True)
 
         # Selection columns and extra extensions are those provided by 'rhs'.
         self.select = []

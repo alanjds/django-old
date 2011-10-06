@@ -1184,13 +1184,19 @@ class Query(object):
         Can also be used to add anything that has an 'add_to_query()' method.
 
         In case add_to_query path is not executed, this method's main purpose
-        is to manage the state of where / having trees.
+        is to walk the q_object's internal nodes and manage the state of the
+        self.where / self.having trees. Leaf nodes will be handled by
+        add_filter.
+
+        The self.where / self.having trees are managed by pushing new nodes
+        to self.where / self.having. This way self.where / self.having is
+        always at the right node when add_filter adds items to them.
 
         We need to start a new subtree when:
            - The connector of the q_object is different than the connector of
-             the where / having and there are childrens to this q object.
-           - The connector of the q_object is NOT.
-           
+             the where / having tree.
+           - The q_object is negated.
+ 
         After call of this function with q_object=~Q(pk=1)&~Q(Q(pk=3)|Q(pk=2))
         we should have the following tree:
                       AND

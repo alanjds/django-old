@@ -33,6 +33,15 @@ class WhereNode(tree.Node):
     """
     default = AND
 
+    def __init__(self, *args, **kwargs):
+        self.contains_aggregate = False
+        super(WhereNode, self).__init__(*args, **kwargs)
+
+    def clone(self, *args, **kwargs):
+        clone = super(WhereNode, self).clone(*args, **kwargs)
+        clone.contains_aggregate = self.contains_aggregate
+        return clone
+
     def add(self, data, connector):
         """
         Add a node to the where-tree. If the data is a list or tuple, it is
@@ -68,47 +77,37 @@ class WhereNode(tree.Node):
         super(WhereNode, self).add((obj, lookup_type, annotation, value),
                 connector)
 
-    def as_sql(self, qn, connection):
+    def final_prune(self, qn, connection):
         """
-        Returns the SQL version of the where clause and the values to be
-        substituted in.
+        This will do the final pruning of the tree, that is, removing parts
+        of the tree that must match everything / nothing.
 
-        If the tree evaluates to always true, then the function will return
-        ("", []). If the function evaluates to always false, EmptyResultSet
-        will be risen.
+        Due to the fact that the only way to get to know that is calling
+        as_sql(), we will at the same time turn the leaf nodes into sql.
         """
-        try:
-            return self._as_sql(qn, connection)
-        except FullResultSet:
-            return "", []
-
-    def _as_sql(self, qn, connection):
-        """
-        Internal helper.
-        """
-        if not self.children:
-            return '', []
-        result = []
-        result_params = []
-        # Track the amount of EmptyResultSets and FullResultSets this node
-        # has. These + self.connector and self.negated are used to check
-        # if this node matches nothing or matches everything.
-        empty_vals = 0
+        self.children_sql = []
+        self.children_params = []
         full_vals = 0
-        for child in self.children:
+        empty_vals = 0
+        # Make a copy - we are modifying at the same time.
+        for child in self.children[:]:
             try:
-                if hasattr(child, 'as_sql'):
-                    sql, params = child.as_sql(qn=qn, connection=connection)
+                if hasattr(child, 'final_prune'):
+                    child.final_prune(qn, connection)
                 else:
                     # A leaf node in the tree.
-                    sql, params = self.make_atom(child, qn, connection)
-                result.append(sql)
-                result_params.extend(params)
+                    if hasattr(child, 'as_sql'):
+                        sql, params = child.as_sql(qn=qn, connection=connection)
+                    else:
+                        sql, params = self.make_atom(child, qn, connection)
+                    self.children_sql.append(sql)
+                    self.children_params.extend(params)
             except EmptyResultSet:
                 empty_vals += 1
+                self.remove(child)
             except FullResultSet:
                 full_vals += 1
-
+                self.remove(child) 
         if self.negated:
             full_vals, empty_vals = empty_vals, full_vals
 
@@ -121,14 +120,74 @@ class WhereNode(tree.Node):
         if empty_vals > 0 and self.connector == AND:
             raise EmptyResultSet
 
+    def split_aggregates(self):
+        where = self._new_instance()
+        having = self._new_instance()
+        self._split_aggregates(where, having)
+        where.prune_tree()
+        having.prune_tree()
+        return where, having
+
+    def _split_aggregates(self, where, having):
+        if self.contains_aggregate:
+             having.add(self, connector=self.connector)
+        if self.connector == OR:
+             if self.subtree_contains_aggregate():
+                 having.add(self, connector=OR)
+             else:
+                 where.add(self, connector=OR)
+        else:
+             where.add(self, connector=AND)
+             for child in children:
+                 child._split_aggregates(where, having) 
+
+    def subtree_contains_aggregate(self):
+        """
+        Returns whether or not all elements of this q_object need to be put
+        together in the HAVING clause.
+        """
+        for child in self.children:
+            if isinstance(child, WhereNode):
+                if self.subtree_contain_aggregate():
+                   return True
+            else:
+                if child[2]:
+                    return True
+        return False
+
+    def as_sql(self):
+        """
+        Turns this tree into SQL and params. It is assumed that leaf nodes are already
+        """
+        if not self.children:
+            return '', []
+        for child in self.children:
+            if hasattr(child, 'as_sql'):
+                sql, params = child.as_sql()
+                self.children_sql.append(sql)
+                self.children_params.extend(params)
+
+
+        # The tree should have been pruned before this. This means that every
+        # node except for the root MUST contain sql
+        assert self.children_sql 
         conn = ' %s ' % self.connector
-        sql_string = conn.join(result)
-        if sql_string:
-            if self.negated:
-                sql_string = 'NOT (%s)' % sql_string
-            elif len(self.children) != 1:
-                sql_string = '(%s)' % sql_string
-        return sql_string, result_params
+        sql_string = conn.join(self.children_sql)
+        if self.negated:
+            sql_string = 'NOT (%s)' % sql_string
+        elif len(self.children) != 1:
+            sql_string = '(%s)' % sql_string
+        return sql_string, self.children_params
+
+    def get_group_by(self, group_by):
+        # This could be made much better, as we do not handle anything else than
+        # Constraint objects. Matches old (1.4 pre-alpha) behavior.
+        for child in self.children:
+             if isinstance(child, tuple) and isinstance(child[0], Constraint):
+                 group_by.add(child[0].alias, child[0].col)
+             elif hasattr(child, 'get_group_by'):
+                 group_by.update(self.where_to_group_by(where))
+        return group_by
 
     def make_atom(self, child, qn, connection):
         """

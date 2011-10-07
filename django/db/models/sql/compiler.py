@@ -48,6 +48,41 @@ class SQLCompiler(object):
         self.quote_cache[name] = r
         return r
 
+
+    def where_to_sql(self):
+        """
+        This method is responsible for:
+           - Removing always True / always False parts of the tree
+           - Splitting the tree into having and where
+           - Getting the group by columns from the where part of the query
+           - And finally turning the remaining trees into SQL and params
+
+        Returns 3-tuple of the form:
+           ((where, w_params), (having, h_params), where_group_by)
+
+        Where the where_group_by is a list of SQL snippets to add into the
+        group by, for example ["T1".some_field]
+        """
+        # Prune the tree. If we are left with a tree that matches nothing
+        # this will raise EmptyResultSet, or FullResultSet in the opposite
+        # condition. EmptyResultSet will be passed to the caller,
+        # FullResultSet will be turned into empty where condition.
+        # This will also turn the leaf nodes into SQL.
+        where = self.query.where
+        try:
+            where.final_prune(self.quote_name_unless_alias, self.connection)
+        except FullResultSet:
+            where = self.query.where_class() 
+
+        if self.query.aggregates:
+            group_by = self.where_to_group_by(where)
+            # Split to having and where trees
+            having_part = self.query.where_class()
+            self.split_where(where, having_part)
+            return (where_part.as_sql(), having_part.as_sql(), group_by)
+        else:
+            return (where.as_sql(), ('', []), set())
+
     def as_sql(self, with_limits=True, with_col_aliases=False):
         """
         Creates the SQL for this query. Returns the SQL string and list of
@@ -68,8 +103,10 @@ class SQLCompiler(object):
         from_, f_params = self.get_from_clause()
 
         qn = self.quote_name_unless_alias
-        where, w_params = self.query.where.as_sql(qn=qn, connection=self.connection)
-        having, h_params = self.query.having.as_sql(qn=qn, connection=self.connection)
+        where_tpl, having_tpl, where_group_by = self.where_to_sql()
+        having, h_params = having_tpl
+        where, w_params = where_tpl
+        
         params = []
         for val in self.query.extra_select.itervalues():
             params.extend(val[1])
@@ -87,7 +124,7 @@ class SQLCompiler(object):
             result.append('WHERE %s' % where)
             params.extend(w_params)
 
-        grouping, gb_params = self.get_grouping()
+        grouping, gb_params = self.get_grouping(where_group_by)
         if grouping:
             if ordering:
                 # If the backend can't group by PK (i.e., any database
@@ -473,38 +510,33 @@ class SQLCompiler(object):
                 first = False
         return result, []
 
-    def get_grouping(self):
+    def get_grouping(self, where_group_by):
         """
         Returns a tuple representing the SQL elements in the "group by" clause.
         """
         qn = self.quote_name_unless_alias
         result, params = [], []
-        if self.query.group_by is not None:
-            if (len(self.query.model._meta.fields) == len(self.query.select) and
-                self.connection.features.allows_group_by_pk):
-                self.query.group_by = [
+        group_by = where_group_by
+        if (len(self.query.model._meta.fields) == len(self.query.select) and
+            self.connection.features.allows_group_by_pk):
+                group_by = set([
                     (self.query.model._meta.db_table, self.query.model._meta.pk.column)
-                ]
+                ])
 
-            group_by = self.query.group_by or []
-
-            extra_selects = []
-            for extra_select, extra_params in self.query.extra_select.itervalues():
-                extra_selects.append(extra_select)
-                params.extend(extra_params)
-            cols = (group_by + self.query.select +
-                self.query.related_select_cols + extra_selects)
-            seen = set()
-            for col in cols:
-                if col in seen:
-                    continue
-                seen.add(col)
-                if isinstance(col, (list, tuple)):
-                    result.append('%s.%s' % (qn(col[0]), qn(col[1])))
-                elif hasattr(col, 'as_sql'):
-                    result.append(col.as_sql(qn, self.connection))
-                else:
-                    result.append('(%s)' % str(col))
+        extra_selects = []
+        for extra_select, extra_params in self.query.extra_select.itervalues():
+            extra_selects.append(extra_select)
+            params.extend(extra_params)
+        
+        cols = group_by.union(self.query.select +
+            self.query.related_select_cols + extra_selects)
+        for col in cols:
+            if isinstance(col, (list, tuple)):
+                result.append('%s.%s' % (qn(col[0]), qn(col[1])))
+            elif hasattr(col, 'as_sql'):
+                result.append(col.as_sql(qn, self.connection))
+            else:
+                result.append('(%s)' % str(col))
         return result, params
 
     def fill_related_selections(self, opts=None, root_alias=None, cur_depth=1,
@@ -863,7 +895,8 @@ class SQLDeleteCompiler(SQLCompiler):
                 "Can only delete from one table at a time."
         qn = self.quote_name_unless_alias
         result = ['DELETE FROM %s' % qn(self.query.tables[0])]
-        where, params = self.query.where.as_sql(qn=qn, connection=self.connection)
+        where_tpl, _, _ = self.where_to_sql()
+        where, params = where_tpl
         result.append('WHERE %s' % where)
         return ' '.join(result), tuple(params)
 
@@ -908,7 +941,8 @@ class SQLUpdateCompiler(SQLCompiler):
         if not values:
             return '', ()
         result.append(', '.join(values))
-        where, params = self.query.where.as_sql(qn=qn, connection=self.connection)
+        where_tpl, _, _ = self.where_to_sql()
+        where, params = where_tpl
         if where:
             result.append('WHERE %s' % where)
         return ' '.join(result), tuple(update_params + params)

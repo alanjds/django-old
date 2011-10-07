@@ -147,6 +147,12 @@ class Node(object):
             obj2 = self.clone()
             self._add(obj, obj2)
 
+    def remove(self, child):
+        assert child in self.children
+        self.children.remove(child)
+        if isinstance(child, Node):
+            child.parent = None
+
     def negate(self):
         """
         Negate the sense of this node.

@@ -47,7 +47,8 @@ class RawQuery(object):
         return RawQuery(self.sql, using, params=self.params)
 
     def convert_values(self, value, field, connection):
-        """Convert the database-returned value into a type that is consistent
+        """
+        Convert the database-returned value into a type that is consistent
         across database backends.
 
         By default, this defers to the underlying backend operations, but
@@ -121,8 +122,6 @@ class Query(object):
         self.tables = []    # Aliases in the order they are created.
         self.where = where()
         self.where_class = where
-        self.group_by = None
-        self.having = where()
         self.order_by = []
         self.low_mark, self.high_mark = 0, None  # Used for offset/limit
         self.distinct = False
@@ -256,11 +255,6 @@ class Query(object):
         obj.tables = self.tables[:]
         obj.where = self.where.clone()
         obj.where_class = self.where_class
-        if self.group_by is None:
-            obj.group_by = None
-        else:
-            obj.group_by = self.group_by[:]
-        obj.having = self.having.clone()
         obj.order_by = self.order_by[:]
         obj.low_mark, obj.high_mark = self.low_mark, self.high_mark
         obj.distinct = self.distinct
@@ -346,7 +340,7 @@ class Query(object):
         # If there is a group by clause, aggregating does not add useful
         # information but retrieves only the first row. Aggregate
         # over the subquery instead.
-        if self.group_by is not None:
+        if self.group_by:
             from django.db.models.sql.subqueries import AggregateQuery
             query = AggregateQuery(self.model)
 
@@ -733,10 +727,9 @@ class Query(object):
         assert set(change_map.keys()).intersection(set(change_map.values())) == set()
 
         # 1. Update references in "select" (normal columns plus aliases),
-        # "group by", "where" and "having".
+        # "group by" and  "where"
         self.where.relabel_aliases(change_map)
-        self.having.relabel_aliases(change_map)
-        for columns in [self.select, self.group_by or []]:
+        for columns in [self.select]:
             for pos, col in enumerate(columns):
                 if isinstance(col, (list, tuple)):
                     old_alias = col[0]
@@ -950,20 +943,6 @@ class Query(object):
                 self.unref_alias(alias)
         self.included_inherited_models = {}
 
-    def need_force_having(self, q_object):
-        """
-        Returns whether or not all elements of this q_object need to be put
-        together in the HAVING clause.
-        """
-        for child in q_object.children:
-            if isinstance(child, Node):
-                if self.need_force_having(child):
-                    return True
-            else:
-                if child[0].split(LOOKUP_SEP)[0] in self.aggregates:
-                    return True
-        return False
-
     def add_aggregate(self, aggregate, model, alias, is_summary):
         """
         Adds a single aggregate expression to the Query
@@ -980,7 +959,7 @@ class Query(object):
                     aggregate.name, field_name, field_name))
         elif ((len(field_list) > 1) or
             (field_list[0] not in [i.name for i in opts.fields]) or
-            self.group_by is None or
+            not self.group_by or
             not is_summary):
             # If:
             #   - the field descriptor has more than one part (foo__bar), or
@@ -1013,7 +992,7 @@ class Query(object):
         aggregate.add_to_query(self, alias, col=col, source=source, is_summary=is_summary)
 
     def add_filter(self, filter_expr, connector=AND, negate=False, trim=False,
-            can_reuse=None, process_extras=True, force_having=False):
+            can_reuse=None, process_extras=True):
         """
         Add a single filter to the query. The 'filter_expr' is a pair:
         (filter_string, value). E.g. ('name__contains', 'fred')
@@ -1051,7 +1030,6 @@ class Query(object):
 
         # By default, this is a WHERE clause. If an aggregate is referenced
         # in the value, the filter will be promoted to a HAVING
-        having_clause = False
 
         # Interpret '__exact=None' as the sql 'is NULL'; otherwise, reject all
         # uses of None as a query value.
@@ -1065,11 +1043,12 @@ class Query(object):
         elif hasattr(value, 'evaluate'):
             # If value is a query expression, evaluate it
             value = SQLEvaluator(value, self)
-            having_clause = value.contains_aggregate
+            self.where.contains_aggregate = True
 
         for alias, aggregate in self.aggregates.items():
             if alias in (parts[0], LOOKUP_SEP.join(parts)):
-                self.having.add((aggregate, lookup_type, value), connector)
+                self.where.add((aggregate, lookup_type, value), connetor)
+                self.where.contains_aggregate = True
                 return
 
         opts = self.get_meta()
@@ -1136,14 +1115,8 @@ class Query(object):
             self.promote_alias_chain(join_it, join_promote)
             self.promote_alias_chain(table_it, table_promote or join_promote)
 
-        if having_clause or force_having:
-            if (alias, col) not in self.group_by:
-                self.group_by.append((alias, col))
-            self.having.add((Constraint(alias, col, field), lookup_type, value),
-                connector)
-        else:
-            self.where.add((Constraint(alias, col, field), lookup_type, value),
-                connector)
+        self.where.add((Constraint(alias, col, field), lookup_type, value),
+            connector)
 
         if negate:
             self.promote_alias_chain(join_list)
@@ -1177,7 +1150,7 @@ class Query(object):
                 self.add_filter(filter, negate=negate, can_reuse=can_reuse,
                         process_extras=False)
 
-    def add_q(self, q_object, force_having=False):
+    def add_q(self, q_object):
         """
         Adds a Q-object to the current filter.
 
@@ -1185,16 +1158,15 @@ class Query(object):
 
         In case add_to_query path is not executed, this method's main purpose
         is to walk the q_object's internal nodes and manage the state of the
-        self.where / self.having trees. Leaf nodes will be handled by
-        add_filter.
+        self.where. Leaf nodes will be handled by add_filter.
 
-        The self.where / self.having trees are managed by pushing new nodes
-        to self.where / self.having. This way self.where / self.having is
-        always at the right node when add_filter adds items to them.
+        The self.where tree is managed by pushing new nodes to the tree. This
+        way self.where is always at the right node when add_filter adds items
+        to it.
 
         We need to start a new subtree when:
            - The connector of the q_object is different than the connector of
-             the where / having tree.
+             the where tree.
            - The q_object is negated.
 
         After call of this function with q_object=~Q(pk=1)&~Q(Q(pk=3)|Q(pk=2))
@@ -1209,6 +1181,9 @@ class Query(object):
 
         This method will call recursively itself for those childrens of the
         q_object which are Q-objs, and call add_filter for the leaf nodes.
+
+        We will add all filters to self.where. When the query is executed, the
+        tree is splitted into where and having clauses.
         """
 
         # Complex custom objects are responsible for adding themselves.
@@ -1216,27 +1191,15 @@ class Query(object):
             q_object.add_to_query(self, self.used_aliases)
             return
 
-        # We need to check upfront if this whole tree should be placed in
-        # the query's having clause or not. The reason is we can't have
-        # one part of ORed clause in having and the other in where. Once set,
-        # force_having can't be changed later on.
-        if not force_having and q_object.connector == OR:
-            force_having = self.need_force_having(q_object)
-
-        # Start subtrees for both having and where if needed. At the end we
-        # check if anything got added into the subtrees. If not, prune em.
+        # Start subtree if needed. At the end we check if anything got added
+        # into the subtrees. If not, prune em.
         where_subtree = False
-        having_subtree = False
         connector = q_object.connector
-        if self.having.connector <> connector or q_object.negated:
-            self.having = self.having.subtree(q_object.connector)
-            having_subtree = True
         if self.where.connector <> connector or q_object.negated:
             self.where = self.where.subtree(q_object.connector)
             where_subtree = True
         if q_object.negated:
             self.where.negate()
-            self.having.negate()
 
         # Aliases that were newly added or not used at all need to
         # be promoted to outer joins if they are nullable relations.
@@ -1248,16 +1211,13 @@ class Query(object):
 
         for child in q_object.children:
             if isinstance(child, Node):
-                self.add_q(child, force_having=force_having)
+                self.add_q(child)
             else:
                 self.add_filter(child, connector, q_object.negated,
-                        can_reuse=self.used_aliases, force_having=force_having)
+                        can_reuse=self.used_aliases)
 
         if connector == OR:
             self.promote_unused_aliases(refcounts_before, self.used_aliases)
-        if having_subtree:
-            self.having = self.having.parent
-            self.having.prune_tree()
         if where_subtree:
             self.where = self.where.parent
             self.where.prune_tree()
@@ -1687,20 +1647,6 @@ class Query(object):
         if force_empty:
             self.default_ordering = False
 
-    def set_group_by(self):
-        """
-        Expands the GROUP BY clause required by the query.
-
-        This will usually be the set of all non-aggregate fields in the
-        return data. If the database backend supports grouping by the
-        primary key, and the query would be equivalent, the optimization
-        will be made automatically.
-        """
-        self.group_by = []
-
-        for sel in self.select:
-            self.group_by.append(sel)
-
     def add_count_column(self):
         """
         Converts the query to do count(...) or count(distinct(pk)) in order to
@@ -1733,7 +1679,6 @@ class Query(object):
         # Clear out the select cache to reflect the new unmasked aggregates.
         self.aggregates = {None: count}
         self.set_aggregate_mask(None)
-        self.group_by = None
 
     def add_select_related(self, fields):
         """

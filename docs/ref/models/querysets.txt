@@ -571,8 +571,6 @@ can be useful in situations where you might want to pass in either a model
 manager or a ``QuerySet`` and do further filtering on the result. After calling
 ``all()`` on either object, you'll definitely have a ``QuerySet`` to work with.
 
-.. _select-related:
-
 select_related
 ~~~~~~~~~~~~~~
 
@@ -689,6 +687,132 @@ is defined. Instead of specifying the field name, use the :attr:`related_name
 
 A :class:`~django.db.models.OneToOneField` is not traversed in the reverse
 direction if you are performing a depth-based ``select_related()`` call.
+
+prefetch_related
+~~~~~~~~~~~~~~~~
+
+.. method:: prefetch_related(*lookups)
+
+.. versionadded:: 1.4
+
+Returns a ``QuerySet`` that will automatically retrieve, in a single batch,
+related objects for each of the specified lookups.
+
+This has a similar purpose to ``select_related``, in that both are designed to
+stop the deluge of database queries that is caused by accessing related objects,
+but the strategy is quite different.
+
+``select_related`` works by creating a SQL join and including the fields of the
+related object in the SELECT statement. For this reason, ``select_related`` gets
+the related objects in the same database query. However, to avoid the much
+larger result set that would result from joining across a 'many' relationship,
+``select_related`` is limited to single-valued relationships - foreign key and
+one-to-one.
+
+``prefetch_related``, on the other hand, does a separate lookup for each
+relationship, and does the 'joining' in Python. This allows it to prefetch
+many-to-many and many-to-one objects, which cannot be done using
+``select_related``, in addition to the foreign key and one-to-one relationships
+that are supported by ``select_related``. It also supports prefetching of
+:class:`~django.contrib.contenttypes.generic.GenericRelation` and
+:class:`~django.contrib.contenttypes.generic.GenericForeignKey`.
+
+For example, suppose you have these models::
+
+    class Topping(models.Model):
+        name = models.CharField(max_length=30)
+
+    class Pizza(models.Model):
+        name = models.CharField(max_length=50)
+        toppings = models.ManyToManyField(Topping)
+
+        def __unicode__(self):
+            return u"%s (%s)" % (self.name, u", ".join([topping.name
+                                                        for topping in self.toppings.all()]))
+
+and run this code::
+
+    >>> Pizza.objects.all()
+    [u"Hawaiian (ham, pineapple)", u"Seafood (prawns, smoked salmon)"...
+
+The problem with this code is that it will run a query on the Toppings table for
+**every** item in the Pizza ``QuerySet``.  Using ``prefetch_related``, this can
+be reduced to two:
+
+    >>> Pizza.objects.all().prefetch_related('toppings')
+
+All the relevant toppings will be fetched in a single query, and used to make
+``QuerySets`` that have a pre-filled cache of the relevant results. These
+``QuerySets`` are then used in the ``self.toppings.all()`` calls.
+
+The additional queries are executed after the QuerySet has begun to be evaluated
+and the primary query has been executed. Note that the result cache of the
+primary QuerySet and all specified related objects will then be fully loaded
+into memory, which is often avoided in other cases - even after a query has been
+executed in the database, QuerySet normally tries to make uses of chunking
+between the database to avoid loading all objects into memory before you need
+them.
+
+Also remember that, as always with QuerySets, any subsequent chained methods
+which imply a different database query will ignore previously cached results,
+and retrieve data using a fresh database query. So, if you write the following:
+
+    >>> pizzas = Pizza.objects.prefetch_related('toppings')
+    >>> [list(pizza.toppings.filter(spicy=True)) for pizza in pizzas]
+
+...then the fact that `pizza.toppings.all()` has been prefetched will not help
+you - in fact it hurts performance, since you have done a database query that
+you haven't used. So use this feature with caution!
+
+You can also use the normal join syntax to do related fields of related
+fields. Suppose we have an additional model to the example above::
+
+    class Restaurant(models.Model):
+        pizzas = models.ManyToMany(Pizza, related_name='restaurants')
+        best_pizza = models.ForeignKey(Pizza, related_name='championed_by')
+
+The following are all legal:
+
+    >>> Restaurant.objects.prefetch_related('pizzas__toppings')
+
+This will prefetch all pizzas belonging to restaurants, and all toppings
+belonging to those pizzas. This will result in a total of 3 database queries -
+one for the restaurants, one for the pizzas, and one for the toppings.
+
+    >>> Restaurant.objects.prefetch_related('best_pizza__toppings')
+
+This will fetch the best pizza and all the toppings for the best pizza for each
+restaurant. This will be done in 3 database queries - one for the restaurants,
+one for the 'best pizzas', and one for one for the toppings.
+
+Of course, the ``best_pizza`` relationship could also be fetched using
+``select_related`` to reduce the query count to 2:
+
+    >>> Restaurant.objects.select_related('best_pizza').prefetch_related('best_pizza__toppings')
+
+Since the prefetch is executed after the main query (which includes the joins
+needed by ``select_related``), it is able to detect that the ``best_pizza``
+objects have already been fetched, and it will skip fetching them again.
+
+Chaining ``prefetch_related`` calls will accumulate the lookups that are
+prefetched. To clear any ``prefetch_related`` behavior, pass `None` as a
+parameter::
+
+   >>> non_prefetched = qs.prefetch_related(None)
+
+One difference to note when using ``prefetch_related`` is that objects created
+by a query can be shared between the different objects that they are related to
+i.e. a single Python model instance can appear at more than one point in the
+tree of objects that are returned. This will normally happen with foreign key
+relationships. Typically this behavior will not be a problem, and will in fact
+save both memory and CPU time.
+
+While ``prefetch_related`` supports prefetching ``GenericForeignKey``
+relationships, the number of queries will depend on the data. Since a
+``GenericForeignKey`` can reference data in multiple tables, one query per table
+referenced is needed, rather than one query for all the items. There could be
+additional queries on the ``ContentType`` table if the relevant rows have not
+already been fetched.
 
 extra
 ~~~~~

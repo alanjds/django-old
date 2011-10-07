@@ -63,6 +63,22 @@ setup for test suites) has seen a performance benefit as a result.
 See the :meth:`~django.db.models.query.QuerySet.bulk_create` docs for more
 information.
 
+``QuerySet.prefetch_related``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Similar to :meth:`~django.db.models.query.QuerySet.select_related` but with a
+different strategy and broader scope,
+:meth:`~django.db.models.query.QuerySet.prefetch_related` has been added to
+:class:`~django.db.models.query.QuerySet`. This method returns a new
+``QuerySet`` that will prefetch in a single batch each of the specified related
+lookups as soon as it begins to be evaluated. Unlike ``select_related``, it does
+the joins in Python, not in the database, and supports many-to-many
+relationships, :class:`~django.contrib.contenttypes.generic.GenericForeignKey`
+and more. This enables you to fix many instances of a very common performance
+problem, in which your code ends up doing O(n) database queries (or worse) if
+objects on your primary ``QuerySet`` each have many related objects that you
+also need.
+
 HTML5
 ~~~~~
 
@@ -114,6 +130,15 @@ ordering dynamically (e.g. depending on the request) has also been added.
 A new :meth:`~django.contrib.admin.ModelAdmin.save_related` hook was added to
 :mod:`~django.contrib.admin.ModelAdmin` to ease the customization of how
 related objects are saved in the admin.
+
+Admin inlines respect user permissions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Admin inlines will now only allow those actions for which the user has
+permission. For ``ManyToMany`` relationships with an auto-created intermediate
+model (which does not have its own permissions), the change permission for the
+related model determines if the user has the permission to add, change or
+delete relationships.
 
 Tools for cryptographic signing
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

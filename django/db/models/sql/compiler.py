@@ -68,7 +68,7 @@ class SQLCompiler(object):
         # condition. EmptyResultSet will be passed to the caller,
         # FullResultSet will be turned into empty where condition.
         # This will also turn the leaf nodes into SQL.
-        where = self.query.where
+        where = self.query.where.clone()
         try:
             where.final_prune(self.quote_name_unless_alias, self.connection)
         except FullResultSet:

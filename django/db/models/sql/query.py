@@ -993,6 +993,10 @@ class Query(object):
         # Add the aggregate to the query
         aggregate.add_to_query(self, alias, col=col, source=source, is_summary=is_summary)
 
+    def add_where_leaf(self, data, negated=False):
+        leaf_class = self.where.leaf_class()
+        self.where.add(leaf_class(data, negated), AND)
+
     def add_filter(self, filter_expr, connector=AND, negate=False, trim=False,
             can_reuse=None, process_extras=True):
         """
@@ -1048,7 +1052,7 @@ class Query(object):
 
         for alias, aggregate in self.aggregates.items():
             if alias in (parts[0], LOOKUP_SEP.join(parts)):
-                self.where.add((aggregate, lookup_type, value), connector)
+                self.add_where_leaf((aggregate, lookup_type, value))
                 return
 
         opts = self.get_meta()
@@ -1115,8 +1119,7 @@ class Query(object):
             self.promote_alias_chain(join_it, join_promote)
             self.promote_alias_chain(table_it, table_promote or join_promote)
 
-        self.where.add((Constraint(alias, col, field), lookup_type, value),
-            connector)
+        self.add_where_leaf((Constraint(alias, col, field), lookup_type, value))
 
         if negate:
             self.promote_alias_chain(join_list)
@@ -1125,13 +1128,10 @@ class Query(object):
                     for alias in join_list:
                         if self.alias_map[alias][JOIN_TYPE] == self.LOUTER:
                             j_col = self.alias_map[alias][RHS_JOIN_COL]
-                            entry = self.where_class()
-                            entry.add(
+                            self.add_where_leaf(
                                 (Constraint(alias, j_col, None), 'isnull', True),
-                                AND
+                                negate=True
                             )
-                            entry.negate()
-                            self.where.add(entry, AND)
                             break
                 if not (lookup_type == 'in'
                             and not hasattr(value, 'as_sql')
@@ -1141,7 +1141,7 @@ class Query(object):
                     # exclude the "foo__in=[]" case from this handling, because
                     # it's short-circuited in the Where class.
                     # We also need to handle the case where a subquery is provided
-                    self.where.add((Constraint(alias, col, None), 'isnull', False), AND)
+                    self.add_where_leaf((Constraint(alias, col, None), 'isnull', False))
 
         if can_reuse is not None:
             can_reuse.update(join_list)
@@ -1521,7 +1521,7 @@ class Query(object):
         # database from tripping over IN (...,NULL,...) selects and returning
         # nothing
         alias, col = query.select[0]
-        query.where.add((Constraint(alias, col, None), 'isnull', False), AND)
+        query.add_where_leaf((Constraint(alias, col, None), 'isnull', False))
 
         self.add_filter(('%s__in' % prefix, query), negate=True, trim=True,
                 can_reuse=can_reuse)
@@ -1721,7 +1721,7 @@ class Query(object):
             # This is order preserving, since self.extra_select is a SortedDict.
             self.extra.update(select_pairs)
         if where or params:
-            self.where.add(ExtraWhere(where, params), AND)
+            self.add_where_leaf(ExtraWhere(where, params))
         if tables:
             self.extra_tables += tuple(tables)
         if order_by:

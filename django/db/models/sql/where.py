@@ -6,40 +6,32 @@ from itertools import repeat
 
 from django.utils import tree
 from django.db.models.fields import Field
-from django.db.models.sql.aggregates import AggregateField
+from django.db.models.sql.aggregates import Aggregate
 from datastructures import EmptyResultSet, FullResultSet
 
 # Connection types
 AND = 'AND'
 OR = 'OR'
 
-class WhereNode(tree.Node):
+class WhereLeaf(object):
     """
-    Used to represent the SQL where-clause.
-
-    The class is tied to the Query class that created it (in order to create
-    the correct SQL).
-
-    The children in this tree are usually either Q-like objects or lists of
-    [table_alias, field_name, db_type, lookup_type, value_annotation,
-    params]. However, a child could also be any class with as_sql() and
-    relabel_aliases() methods.
+    Represents a leaf node in a where tree. Contains single constrain,
+    and knows how to turn it into sql and params.
     """
-    default = AND
+    __slots__ = ['sql', 'data', 'params', 'negated', 'is_leaf', 'match_all',
+                 'match_nothing']
+    # We could ofcourse test isinstance, but this is prettier.
+    is_leaf = True
 
-    def add(self, data, connector):
-        """
-        Add a node to the where-tree. If the data is a list or tuple, it is
-        expected to be of the form (obj, lookup_type, value), where obj is
-        a Constraint object, and is then slightly munged before being stored
-        (to avoid storing any reference to field objects). Otherwise, the 'data'
-        is stored unchanged and can be any class with an 'as_sql()' method.
-        """
-        if not isinstance(data, (list, tuple)):
-            super(WhereNode, self).add(data, connector)
-            return
-
+    def __init__(self, data, negated=False):
+        self.sql = ''
+        self.negated = negated
+        self.params = []
+        self.match_all = False
+        self.match_nothing = False
         obj, lookup_type, value = data
+
+        # Preprocess the data
         if hasattr(value, '__iter__') and hasattr(value, 'next'):
             # Consume any generators immediately, so that we can determine
             # emptiness and transform any non-empty values correctly.
@@ -58,120 +50,17 @@ class WhereNode(tree.Node):
 
         if hasattr(obj, "prepare"):
             value = obj.prepare(lookup_type, value)
+        self.data = (obj, lookup_type, annotation, value) 
 
-        super(WhereNode, self).add((obj, lookup_type, annotation, value),
-                connector)
-
-    def final_prune(self, qn, connection):
-        """
-        This will do the final pruning of the tree, that is, removing parts
-        of the tree that must match everything / nothing.
-
-        Due to the fact that the only way to get to know that is calling
-        as_sql(), we will at the same time turn the leaf nodes into sql.
-        """
-        self.children_sql = []
-        self.children_params = []
-        full_vals, empty_vals = 0, 0
-        condition_amount = len(self.children)
-        # Make a copy - we are modifying at the same time.
-        for child in self.children[:]:
-            try:
-                if hasattr(child, 'final_prune'):
-                    child.final_prune(qn, connection)
-                else:
-                    # A leaf node in the tree.
-                    if hasattr(child, 'as_sql'):
-                        sql, params = child.as_sql(qn=qn, connection=connection)
-                    else:
-                        sql, params = self.make_atom(child, qn, connection)
-                    self.children_sql.append(sql)
-                    self.children_params.extend(params)
-            except EmptyResultSet:
-                empty_vals += 1
-                self.remove(child)
-            except FullResultSet:
-                full_vals += 1
-                self.remove(child) 
-        # This is in effect doing a NOT val for the return value,
-        # but as they are exceptions, we can do that.
-        if self.negated:
-            full_vals, empty_vals = empty_vals, full_vals
-
-        if ((full_vals > 0 and self.connector == OR) or
-               (full_vals == condition_amount and self.connector == AND)):
-            raise FullResultSet
-        if ((empty_vals == condition_amount and self.connector == OR) or
-                (empty_vals > 0 and self.connector == AND)):
-            raise EmptyResultSet
-
-    def split_aggregates(self, having, negated):
-        if self.connector == OR:
-             if self.subtree_contains_aggregate():
-                 having.add(self, connector=OR)
-                 self.parent.remove(self)
-                 if negated:
-                     having.netgate()
-        else:
-             if self.negated:
-                 negated = not negated
-             for child in self.children[:]:
-                 if hasattr(child, 'split_aggregates'):
-                     child.split_aggregates(having, negated) 
-                 elif child[0].contains_aggregate:
-                     if negated:
-                         neg_node = having.__class__([child])
-                         neg_node.negate()
-                         having.add(neg_node, AND)
-                     else:
-                         having.add(child, AND)
-
-    def subtree_contains_aggregate(self):
-        """
-        Returns whether or not all elements of this q_object need to be put
-        together in the HAVING clause.
-        """
-        for child in self.children:
-            if isinstance(child, WhereNode) and self.subtree_contain_aggregate():
-                return True
-            if child[0].contains_aggregate:
-                return True
-        return False
+    def create_sql(self, qn, connection):
+        self.sql, self.params = self.make_atom(qn, connection)
+        if self.negated and self.sql:
+            self.sql = 'NOT ' + self.sql
 
     def as_sql(self):
-        """
-        Turns this tree into SQL and params. It is assumed that leaf nodes are already
-        TODO: rename, and have as_sql implement the normal as_sql(qn, connection)
-        interface.
-        """
-        if not self.children:
-            return '', []
-        for child in self.children:
-            if hasattr(child, 'as_sql'):
-                sql, params = child.as_sql()
-                self.children_sql.append(sql)
-                self.children_params.extend(params)
+        return self.sql, self.params
 
-        # The tree should have been pruned before this. This means that every
-        # node except for the root MUST contain sql
-        assert self.children_sql 
-        conn = ' %s ' % self.connector
-        sql_string = conn.join(self.children_sql)
-        if self.negated:
-            sql_string = 'NOT (%s)' % sql_string
-        elif len(self.children) != 1:
-            sql_string = '(%s)' % sql_string
-        return sql_string, self.children_params
-
-    def get_group_by(self, group_by):
-        for child in self.children:
-             if isinstance(child, tuple):
-                 group_by.add((child[0].alias, child[0].col))
-             elif hasattr(child, 'get_group_by'):
-                 child.get_group_by(group_by)
-        return group_by
-
-    def make_atom(self, child, qn, connection):
+    def make_atom(self, qn, connection):
         """
         Turn a tuple (table_alias, column_name, db_type, lookup_type,
         value_annot, params) into valid SQL.
@@ -179,7 +68,7 @@ class WhereNode(tree.Node):
         Returns the string for the SQL fragment and the parameters to use for
         it.
         """
-        lvalue, lookup_type, value_annot, params_or_value = child
+        lvalue, lookup_type, value_annot, params_or_value = self.data
         if hasattr(lvalue, 'process'):
             lvalue, params = lvalue.process(lookup_type, params_or_value, connection)
         else:
@@ -251,7 +140,12 @@ class WhereNode(tree.Node):
             return connection.ops.regex_lookup(lookup_type) % (field_sql, cast_sql), params
 
         raise TypeError('Invalid lookup_type: %r' % lookup_type)
-
+        
+    def subtree_contains_aggregate(self):
+        return (isinstance(self.data[0], Aggregate) or 
+               (hasattr(self.data[2], 'contains_aggregate') and
+                self.data[2].contains_aggregate))
+    
     def sql_for_columns(self, data, qn, connection):
         """
         Returns the SQL fragment used for the left-hand side of a column
@@ -264,6 +158,131 @@ class WhereNode(tree.Node):
         else:
             lhs = qn(name)
         return connection.ops.field_cast_sql(db_type) % lhs
+
+class WhereNode(tree.Node):
+    """
+    Used to represent the SQL where-clause.
+
+    The class is tied to the Query class that created it (in order to create
+    the correct SQL).
+
+    The children in this tree are usually either Q-like objects or lists of
+    [table_alias, field_name, db_type, lookup_type, value_annotation,
+    params]. However, a child could also be any class with as_sql() and
+    relabel_aliases() methods.
+    """
+    __slots__ = ['children', 'parent' 'connector', 'negated',
+                 'is_leaf', 'match_all', 'match_nothing']
+
+    default = AND
+    is_leaf = False
+
+    def __init__(self, *args, **kwargs):
+        super(WhereNode, self).__init__(*args, **kwargs)
+        self.match_all = False
+        self.match_nothing = False
+
+    def clone(self, *args, **kwargs):
+        c = super(WhereNode, self).clone(*args, **kwargs)
+        c.match_all = self.match_all
+        c.match_nothing = self.match_nothing
+        return c
+
+    def leaf_class(cls):
+        # Subclass hook
+        return WhereLeaf
+    leaf_class = classmethod(leaf_class)
+
+    def final_prune(self, qn, connection):
+        """
+        This will do the final pruning of the tree, that is, removing parts
+        of the tree that must match everything / nothing.
+
+        Due to the fact that the only way to get to know that is calling
+        as_sql(), we will at the same time turn the leaf nodes into sql.
+        """
+        for child in self.children:
+            if child.is_leaf:
+                child.create_sql(qn, connection)
+            else:
+                child.final_prune(qn, connection)
+            if child.match_all:
+                 if self.connector == OR:
+                     self.match_all = True
+                     self.remove_all_childs()
+                     break
+                 self.remove(child)
+            if child.match_nothing:
+                 if self.connector == AND:
+                     self.match_nothing = True
+                     self.remove_all_childs()
+                     break
+                 self.remove(child)
+        if not self.children:
+            self.match_all = True 
+        if self.negated:
+            self.match_all, self.match_nothing = self.match_nothing, self.match_all
+
+    def split_aggregates(self, having):
+        if self.connector == OR:
+             if self.subtree_contains_aggregate():
+                 having.add(self, connector=OR)
+                 self.parent.remove(self)
+        else:
+             if self.negated:
+                 neg_node = having._new_instance(negated=True)
+                 having.add(neg_node, AND)
+                 having = neg_node
+             for child in self.children[:]:
+                 if child.is_leaf:
+                     if child.subtree_contains_aggregate():
+                         having.add(child, AND)
+                         self.remove(child)
+                 else:
+                     child.split_aggregates(having) 
+
+    def subtree_contains_aggregate(self):
+        """
+        Returns whether or not all elements of this q_object need to be put
+        together in the HAVING clause.
+        """
+        for child in self.children:
+            return child.subtree_contains_aggregate()
+        return False
+
+    def as_sql(self):
+        """
+        Turns this tree into SQL and params. It is assumed that leaf nodes are already
+        TODO: rename, and have as_sql implement the normal as_sql(qn, connection)
+        interface.
+        """
+        if not self.children:
+            return '', []
+        sql_snippets, params = [], []
+        for child in self.children:
+            child_sql, child_params = child.as_sql()
+            sql_snippets.append(child_sql); params.extend(child_params)
+
+        # The tree should have been pruned before this. This means that every
+        # node except for the root MUST contain sql. Root is handled
+        # differently before calling this method.
+        assert sql_snippets
+        conn = ' %s ' % self.connector
+        sql_string = conn.join(sql_snippets)
+        if self.negated:
+            sql_string = 'NOT (%s)' % sql_string
+        elif len(self.children) != 1:
+            sql_string = '(%s)' % sql_string
+        return sql_string, params
+
+    def get_group_by(self, group_by):
+        for child in self.children:
+             if isinstance(child, tuple):
+                 group_by.add((child[0].alias, child[0].col))
+             elif hasattr(child, 'get_group_by'):
+                 child.get_group_by(group_by)
+        return group_by
+
 
     def relabel_aliases(self, change_map, node=None):
         """
@@ -306,12 +325,10 @@ class Constraint(object):
     An object that can be passed to WhereNode.add() and knows how to
     pre-process itself prior to including in the WhereNode.
     """
+    __slots__ = ['alias', 'col', 'field']
+    
     def __init__(self, alias, col, field):
         self.alias, self.col, self.field = alias, col, field
-        self.contains_aggregate = (
-            isinstance(alias, AggregateField) or
-           (hasattr(field, 'contains_aggregate') and field.contains_aggregate)
-        )
                                    
 
     def __getstate__(self):

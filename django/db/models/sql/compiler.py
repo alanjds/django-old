@@ -68,6 +68,8 @@ class SQLCompiler(object):
         # condition. EmptyResultSet will be passed to the caller,
         # FullResultSet will be turned into empty where condition.
         # This will also turn the leaf nodes into SQL.
+        from django.debug import trace
+        trace()
         where = self.query.where
         try:
             where.final_prune(self.quote_name_unless_alias, self.connection)
@@ -75,8 +77,11 @@ class SQLCompiler(object):
             where = None
 
         if self.query.aggregates and where:
+            from django.conf import settings
+            if settings.DEBUG:
+                 import ipdb; ipdb.set_trace()
             having = self.query.where_class()
-            where.split_aggregates(having, False)
+            where.split_aggregates(having)
             where.prune_tree(); having.prune_tree()
             group_by = where.get_group_by(set())
             return (where.as_sql(), having.as_sql(), group_by)

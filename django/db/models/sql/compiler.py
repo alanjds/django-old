@@ -69,7 +69,6 @@ class SQLCompiler(object):
         where.final_prune(self.quote_name_unless_alias, self.connection)
         if where.match_nothing:
             raise EmptyResultSet
-
         if self.query.aggregates and where:
             having = self.query.where_class()
             where.split_aggregates(having)

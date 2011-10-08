@@ -7,7 +7,6 @@ from itertools import repeat
 from django.utils import tree
 from django.db.models.fields import Field
 from django.db.models.sql.aggregates import Aggregate
-from datastructures import EmptyResultSet
 
 # Connection types
 AND = 'AND'
@@ -15,10 +14,15 @@ OR = 'OR'
 
 class WhereLeaf(object):
     """
-    Represents a leaf node in a where tree. Contains single constrain,
+    Represents a leaf node in a where tree. Contains single constraint,
     and knows how to turn it into sql and params.
+
+    This implements many of the WhereNode's methods. Here the methods
+    will do the terminal work, while WhereNode's methods will be mostly
+    recursive in nature.
     """
-    # We could ofcourse test isinstance, but this is prettier.
+
+    # Fast and pretty way to test if the node is a leaf node.
     is_leaf = True
 
     def __init__(self, data, negated=False):
@@ -150,6 +154,7 @@ class WhereLeaf(object):
             return connection.ops.regex_lookup(lookup_type) % (field_sql, cast_sql), params
 
         raise TypeError('Invalid lookup_type: %r' % lookup_type)
+         
         
     def set_sql_matches_nothing(self):
         if self.negated:
@@ -158,9 +163,14 @@ class WhereLeaf(object):
             self.match_nothing = True
 
     def subtree_contains_aggregate(self):
+        """
+        The leaf node contains aggregate if it has an aggregate in it, or it
+        contains a subquery which contains an aggregate as a value.
+        """
         return (isinstance(self.data[0], Aggregate) or 
-               (hasattr(self.data[2], 'contains_aggregate') and
-                self.data[2].contains_aggregate))
+                   (len(self.data) == 4 and
+                    hasattr(self.data[3], 'contains_aggregate') and
+                    self.data[3].contains_aggregate))
     
     def sql_for_columns(self, data, qn, connection):
         """
@@ -187,14 +197,27 @@ class WhereLeaf(object):
             # Check if the query value also requires relabelling
             if hasattr(self.data[3], 'relabel_aliases'):
                 self.data[3].relabel_aliases(change_map)
+
+    def get_group_by(self, group_by):
+        group_by.add((self.data[0].alias, self.data[0].col))
     
     def clone(self):
+        """
+        TODO: It is unfortunate that the data can be all sorts of things. It
+        would be a good idea to make the Constraint a bit larger class, so
+        that it could hold also the lookup type and value. Then we would
+        always have something implementing similar interface in Data.
+        """
         clone = self.__class__(None, self.negated)
-        if hasattr(self.data[3], 'clone'):
-            new_data3 = self.data[3].clone()
+        if hasattr(self.data, 'clone'):
+            clone.data = self.data.clone()
+        
         else:
-            new_data3 = self.data[3]
-        clone.data = (self.data[0].clone(), self.data[1], self.data[2], new_data3)
+            if hasattr(self.data[3], 'clone'):
+                new_data3 = self.data[3].clone()
+            else:
+                new_data3 = self.data[3]
+            clone.data = (self.data[0].clone(), self.data[1], self.data[2], new_data3)
         return clone
 
     def negate(self):
@@ -226,7 +249,6 @@ class WhereNode(tree.Node):
     leaf_class = classmethod(leaf_class)
 
     def final_prune(self, qn, connection):
-      try:
         """
         This will do the final pruning of the tree, that is, removing parts
         of the tree that must match everything / nothing.
@@ -262,8 +284,7 @@ class WhereNode(tree.Node):
         if self.negated:
             # If the node is negated, then turn the tables around.
             self.match_all, self.match_nothing = self.match_nothing, self.match_all
-      except Exception, e:
-        import ipdb; ipdb.set_trace()
+    
     def split_aggregates(self, having, parent=None):
         """
         Remove those parts of self that must go into the having clause. Part

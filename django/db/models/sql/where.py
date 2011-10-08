@@ -7,7 +7,7 @@ from itertools import repeat
 from django.utils import tree
 from django.db.models.fields import Field
 from django.db.models.sql.aggregates import Aggregate
-from datastructures import EmptyResultSet, FullResultSet
+from datastructures import EmptyResultSet
 
 # Connection types
 AND = 'AND'
@@ -74,7 +74,12 @@ class WhereLeaf(object):
         """
         lvalue, lookup_type, value_annot, params_or_value = self.data
         if hasattr(lvalue, 'process'):
-            lvalue, params = lvalue.process(lookup_type, params_or_value, connection)
+            from django.db.models.base import ObjectDoesNotExist
+            try:
+                lvalue, params = lvalue.process(lookup_type, params_or_value, connection)
+            except ObjectDoesNotExist:
+                self.set_sql_matches_nothing()
+                return '', []
         else:
             params = Field().get_db_prep_lookup(lookup_type, params_or_value,
                 connection=connection, prepared=True)
@@ -109,7 +114,8 @@ class WhereLeaf(object):
 
         if lookup_type == 'in':
             if not value_annot:
-                raise EmptyResultSet
+                self.set_sql_matches_nothing()
+                return '', []
             if extra:
                 return ('%s IN %s' % (field_sql, extra), params)
             max_in_list_size = connection.ops.max_in_list_size()
@@ -145,6 +151,12 @@ class WhereLeaf(object):
 
         raise TypeError('Invalid lookup_type: %r' % lookup_type)
         
+    def set_sql_matches_nothing(self):
+        if self.negated:
+            self.match_everything = True
+        else:
+            self.match_nothing = True
+
     def subtree_contains_aggregate(self):
         return (isinstance(self.data[0], Aggregate) or 
                (hasattr(self.data[2], 'contains_aggregate') and
@@ -214,6 +226,7 @@ class WhereNode(tree.Node):
     leaf_class = classmethod(leaf_class)
 
     def final_prune(self, qn, connection):
+      try:
         """
         This will do the final pruning of the tree, that is, removing parts
         of the tree that must match everything / nothing.
@@ -234,21 +247,31 @@ class WhereNode(tree.Node):
             if child.match_all:
                  if self.connector == OR:
                      self.match_all = True
-                     self.remove_all_children()
                      break
                  self.remove(child)
             if child.match_nothing:
                  if self.connector == AND:
                      self.match_nothing = True
-                     self.remove_all_children()
                      break
                  self.remove(child)
-        if not self.children:
-            self.match_all = True 
+        else:
+            # We got through the loop without a break. Check if there are any
+            # children left. If not, this node must be a match_all node.
+            if not self.children:
+                self.match_all = True 
         if self.negated:
+            # If the node is negated, then turn the tables around.
             self.match_all, self.match_nothing = self.match_nothing, self.match_all
-
+      except Exception, e:
+        import ipdb; ipdb.set_trace()
     def split_aggregates(self, having, parent=None):
+        """
+        Remove those parts of self that must go into the having clause. Part
+        must go into having if:
+          - It is connected to parent with OR and the subtree contains
+            aggregate
+          - The node is a leaf node and it contains aggregate
+        """
         if self.connector == OR:
              if self.subtree_contains_aggregate():
                  having.add(self, connector=OR)
@@ -281,20 +304,14 @@ class WhereNode(tree.Node):
         TODO: rename, and have as_sql implement the normal as_sql(qn, connection)
         interface.
         """
-        if not self.children:
-            return '', []
         sql_snippets, params = [], []
         for child in self.children:
             child_sql, child_params = child.as_sql()
             sql_snippets.append(child_sql); params.extend(child_params)
 
-        # The tree should have been pruned before this. This means that every
-        # node except for the root MUST contain sql. Root is handled
-        # differently before calling this method.
-        assert sql_snippets
         conn = ' %s ' % self.connector
         sql_string = conn.join(sql_snippets)
-        if self.negated:
+        if self.negated and sql_string:
             sql_string = 'NOT (%s)' % sql_string
         elif len(self.children) != 1:
             sql_string = '(%s)' % sql_string
@@ -302,12 +319,7 @@ class WhereNode(tree.Node):
 
     def get_group_by(self, group_by):
         for child in self.children:
-             if isinstance(child, tuple):
-                 group_by.add((child[0].alias, child[0].col))
-             elif hasattr(child, 'get_group_by'):
-                 child.get_group_by(group_by)
-        return group_by
-
+            child.get_group_by(group_by)
 
     def relabel_aliases(self, change_map, node=None):
         """
@@ -336,7 +348,6 @@ class Constraint(object):
     
     def __init__(self, alias, col, field):
         self.alias, self.col, self.field = alias, col, field
-                                   
 
     def __getstate__(self):
         """Save the state of the Constraint for pickling.
@@ -370,25 +381,19 @@ class Constraint(object):
     def process(self, lookup_type, value, connection):
         """
         Returns a tuple of data suitable for inclusion in a WhereNode
-        instance.
+        instance. Can raise ObjectDoesNotExist
         """
-        # Because of circular imports, we need to import this here.
-        from django.db.models.base import ObjectDoesNotExist
-        try:
-            if self.field:
-                params = self.field.get_db_prep_lookup(lookup_type, value,
-                    connection=connection, prepared=True)
-                db_type = self.field.db_type(connection=connection)
-            else:
-                # This branch is used at times when we add a comparison to NULL
-                # (we don't really want to waste time looking up the associated
-                # field object at the calling location).
-                params = Field().get_db_prep_lookup(lookup_type, value,
-                    connection=connection, prepared=True)
-                db_type = None
-        except ObjectDoesNotExist:
-            raise EmptyResultSet
-
+        if self.field:
+            params = self.field.get_db_prep_lookup(lookup_type, value,
+                connection=connection, prepared=True)
+            db_type = self.field.db_type(connection=connection)
+        else:
+            # This branch is used at times when we add a comparison to NULL
+            # (we don't really want to waste time looking up the associated
+            # field object at the calling location).
+            params = Field().get_db_prep_lookup(lookup_type, value,
+                connection=connection, prepared=True)
+            db_type = None
         return (self.alias, self.col, db_type), params
 
     def relabel_aliases(self, change_map):

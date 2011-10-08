@@ -5,7 +5,7 @@ from django.db import transaction
 from django.db.backends.util import truncate_name
 from django.db.models.query_utils import select_related_descend
 from django.db.models.sql.constants import *
-from django.db.models.sql.datastructures import EmptyResultSet, FullResultSet
+from django.db.models.sql.datastructures import EmptyResultSet
 from django.db.models.sql.expressions import SQLEvaluator
 from django.db.models.sql.query import get_proxied_model, get_order_dir, Query
 from django.db.utils import DatabaseError
@@ -64,15 +64,11 @@ class SQLCompiler(object):
         group by, for example ["T1".some_field]
         """
         # Prune the tree. If we are left with a tree that matches nothing
-        # this will raise EmptyResultSet, or FullResultSet in the opposite
-        # condition. EmptyResultSet will be passed to the caller,
-        # FullResultSet will be turned into empty where condition.
-        # This will also turn the leaf nodes into SQL.
+        # this EmptyResultSet will be risen.
         where = self.query.where.clone()
-        try:
-            where.final_prune(self.quote_name_unless_alias, self.connection)
-        except FullResultSet:
-            where = None
+        where.final_prune(self.quote_name_unless_alias, self.connection)
+        if where.match_nothing:
+            raise EmptyResultSet
 
         if self.query.aggregates and where:
             having = self.query.where_class()

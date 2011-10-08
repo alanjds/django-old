@@ -132,6 +132,7 @@ class Query(object):
 
         # SQL aggregate-related attributes
         self.aggregates = SortedDict() # Maps alias -> SQL aggregate function
+        self.group_by = False
         self.aggregate_select_mask = None
         self._aggregate_select_cache = None
 
@@ -276,6 +277,7 @@ class Query(object):
         # It will get re-populated in the cloned queryset the next time it's
         # used.
         obj._aggregate_select_cache = None
+        obj.group_by = self.group_by
         obj.max_depth = self.max_depth
         obj.extra = self.extra.copy()
         if self.extra_select_mask is None:

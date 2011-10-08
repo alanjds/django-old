@@ -45,11 +45,6 @@ class Node(object):
         return obj
     _new_instance = classmethod(_new_instance)
 
-    def empty(cls):
-        return cls._new_instance([])
-    empty = classmethod(empty)
-
-
     def clone(self, memo=None):
         """
         Clones the whole tree, not just the subtree. We have loops in
@@ -60,7 +55,7 @@ class Node(object):
             memo = {}
         if self in memo:
             return memo[self]
-        obj = self.empty()
+        obj = self._new_instance()
         memo[self] = obj
         for child in self.children:
              if isinstance(child, Node):
@@ -160,7 +155,7 @@ class Node(object):
         self.negated = not self.negated
 
     def subtree(self, conn_type):
-        obj = self.empty()
+        obj = self._new_instance()
         obj.connector = conn_type
         obj.parent = self
         self.children.append(obj)

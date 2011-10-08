@@ -75,10 +75,8 @@ class SQLCompiler(object):
             where = self.query.where_class() 
 
         if self.query.aggregates:
+            where, having_part = where.split_aggregates()
             group_by = self.where_to_group_by(where)
-            # Split to having and where trees
-            having_part = self.query.where_class()
-            self.split_where(where, having_part)
             return (where_part.as_sql(), having_part.as_sql(), group_by)
         else:
             return (where.as_sql(), ('', []), set())
@@ -514,6 +512,8 @@ class SQLCompiler(object):
         """
         Returns a tuple representing the SQL elements in the "group by" clause.
         """
+        if not self.query.group_by:
+             return [], []
         qn = self.quote_name_unless_alias
         result, params = [], []
         group_by = where_group_by

@@ -513,6 +513,7 @@ class Query(object):
             # the root node's connector must always be AND
             if self.where.connector == OR:
                 self.where = self.where_class([self.where])
+        self.where.prune_tree()
 
         # Selection columns and extra extensions are those provided by 'rhs'.
         self.select = []

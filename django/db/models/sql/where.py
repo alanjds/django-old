@@ -230,7 +230,6 @@ class WhereNode(tree.Node):
             if child.is_leaf:
                 child.create_sql(qn, connection)
             else:
-                import ipdb; ipdb.set_trace()
                 child.final_prune(qn, connection)
             if child.match_all:
                  if self.connector == OR:

@@ -122,14 +122,14 @@ class Node(object):
         for child in self.children[:]:
             if not child:
                 self.children.remove(child)
-            if isinstance(child, Node):
+            elif not child.is_leaf:
                 child.prune_tree()
                 if len(child) == 1:
                     # There is no need for this node.we can prune internal
                     # nodes with just on child
                     grandchild = child.children[0]
                     if child.negated:
-                        grantchild.negate()
+                        grandchild.negate()
                     self.children.remove(child)
                     self.children.append(grandchild)
                 elif not child:

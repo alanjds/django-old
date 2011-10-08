@@ -325,6 +325,8 @@ class WhereNode(tree.Node):
         TODO: rename, and have as_sql implement the normal as_sql(qn, connection)
         interface.
         """
+        if not self:
+            return '', []
         sql_snippets, params = [], []
         for child in self.children:
             child_sql, child_params = child.as_sql()

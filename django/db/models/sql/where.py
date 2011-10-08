@@ -12,13 +12,6 @@ from datastructures import EmptyResultSet, FullResultSet
 AND = 'AND'
 OR = 'OR'
 
-class EmptyShortCircuit(Exception):
-    """
-    Internal exception used to indicate that a "matches nothing" node should be
-    added to the where-clause.
-    """
-    pass
-
 class WhereNode(tree.Node):
     """
     Used to represent the SQL where-clause.
@@ -87,8 +80,7 @@ class WhereNode(tree.Node):
         """
         self.children_sql = []
         self.children_params = []
-        full_vals = 0
-        empty_vals = 0
+        full_vals, empty_vals = 0, 0
         # Make a copy - we are modifying at the same time.
         for child in self.children[:]:
             try:
@@ -108,16 +100,16 @@ class WhereNode(tree.Node):
             except FullResultSet:
                 full_vals += 1
                 self.remove(child) 
+        # This is in effect doing a NOT val for the return value,
+        # but as they are exceptions, we can do that.
         if self.negated:
             full_vals, empty_vals = empty_vals, full_vals
 
-        if full_vals > 0 and self.connector == OR:
+        if ((full_vals > 0 and self.connector == OR)
+               (full_vals == len(self) and self.connector == AND)):
             raise FullResultSet
-        if full_vals == len(self) and self.connector == AND:
-            raise FullResultSet
-        if empty_vals == len(self) and self.connector == OR:
-            raise EmptyResultSet
-        if empty_vals > 0 and self.connector == AND:
+        if ((empty_vals == len(self) and self.connector == OR) or
+                (empty_vals > 0 and self.connector == AND)):
             raise EmptyResultSet
 
     def split_aggregates(self):
@@ -147,17 +139,17 @@ class WhereNode(tree.Node):
         together in the HAVING clause.
         """
         for child in self.children:
-            if isinstance(child, WhereNode):
-                if self.subtree_contain_aggregate():
-                   return True
-            else:
-                if child[2]:
-                    return True
+            if isinstance(child, WhereNode) and self.subtree_contain_aggregate():
+                return True
+            elif child[2]:
+                return True
         return False
 
     def as_sql(self):
         """
         Turns this tree into SQL and params. It is assumed that leaf nodes are already
+        TODO: rename, and have as_sql implement the normal as_sql(qn, connection)
+        interface.
         """
         if not self.children:
             return '', []
@@ -166,7 +158,6 @@ class WhereNode(tree.Node):
                 sql, params = child.as_sql()
                 self.children_sql.append(sql)
                 self.children_params.extend(params)
-
 
         # The tree should have been pruned before this. This means that every
         # node except for the root MUST contain sql
@@ -180,8 +171,6 @@ class WhereNode(tree.Node):
         return sql_string, self.children_params
 
     def get_group_by(self, group_by):
-        # This could be made much better, as we do not handle anything else than
-        # Constraint objects. Matches old (1.4 pre-alpha) behavior.
         for child in self.children:
              if isinstance(child, tuple) and isinstance(child[0], Constraint):
                  group_by.add(child[0].alias, child[0].col)
@@ -199,10 +188,7 @@ class WhereNode(tree.Node):
         """
         lvalue, lookup_type, value_annot, params_or_value = child
         if hasattr(lvalue, 'process'):
-            try:
-                lvalue, params = lvalue.process(lookup_type, params_or_value, connection)
-            except EmptyShortCircuit:
-                raise EmptyResultSet
+            lvalue, params = lvalue.process(lookup_type, params_or_value, connection)
         else:
             params = Field().get_db_prep_lookup(lookup_type, params_or_value,
                 connection=connection, prepared=True)
@@ -379,7 +365,7 @@ class Constraint(object):
                     connection=connection, prepared=True)
                 db_type = None
         except ObjectDoesNotExist:
-            raise EmptyShortCircuit
+            raise EmptyResultSet
 
         return (self.alias, self.col, db_type), params
 

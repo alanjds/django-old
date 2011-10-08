@@ -254,11 +254,11 @@ class WhereNode(tree.Node):
         if self.negated:
             self.match_all, self.match_nothing = self.match_nothing, self.match_all
 
-    def split_aggregates(self, having):
+    def split_aggregates(self, having, parent=None):
         if self.connector == OR:
              if self.subtree_contains_aggregate():
                  having.add(self, connector=OR)
-                 self.parent.remove(self)
+                 parent.remove(self)
         else:
              if self.negated:
                  neg_node = having._new_instance(negated=True)
@@ -270,7 +270,7 @@ class WhereNode(tree.Node):
                          having.add(child, AND)
                          self.remove(child)
                  else:
-                     child.split_aggregates(having) 
+                     child.split_aggregates(having, self) 
 
     def subtree_contains_aggregate(self):
         """

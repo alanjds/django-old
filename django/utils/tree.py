@@ -41,24 +41,12 @@ class Node(object):
         is called.
         """
         obj = self._new_instance()
-        # For performance reasons we do not want to
-        # call _add for the leaf nodes - thus we copy
-        # the list, and instead of adding all the cloned
-        # nodes, we remove the internal nodes and add the
-        # external nodes.
-        if not clone_leafs:
-            leaf_children = [c for c in self.children if c.is_leaf]
-            copy = [c for c in self.children if not c.is_leaf]
-        else:
-            leaf_children = []
-            copy = self.children
-        for child in copy:
+        for child in self.children:
              if isinstance(child, Node):
                  child = child.clone(clone_leafs)
              elif clone_leafs and hasattr(child, 'clone'):
                  child = child.clone()
-             obj._add(child)
-        obj.children.extend(leaf_children) 
+             obj.childern.append(obj)
         obj.connector = self.connector
         obj.negated = self.negated
         return obj
@@ -87,13 +75,6 @@ class Node(object):
         return "\n".join(buf)
     as_subtree = property(_as_subtree)
 
-    def _as_tree(self):
-        root = self
-        while root.parent:
-            root = root.parent
-        return root._as_subtree(indent=0)
-    as_tree = property(_as_tree)
-
     def __len__(self):
         """
         The size of a node if the number of children it has.
@@ -112,15 +93,6 @@ class Node(object):
         """
         return other in self.children
 
-    def _add(self, *nodes):
-        """
-        A helper method to keep the parent/child links in valid state.
-        """
-        for node in nodes:
-            self.children.append(node)
-            if isinstance(node, Node):
-                node.parent = self
-
     def add(self, node, conn_type):
         """
         Adds a new node to the tree. If the conn_type is the same as the
@@ -131,10 +103,10 @@ class Node(object):
         if node in self.children and conn_type == self.connector:
             return
         if self.connector == conn_type:
-            self._add(node)
+            self.children.append(node)
         else:
             obj = self._new_instance([node], conn_type)
-            self._add(obj)
+            self.children.append(obj)
 
     def remove(self, child):
         self.children.remove(child)
@@ -158,14 +130,15 @@ class Node(object):
         """
         for child in self.children[:]:
             if not child:
-                self.remove(child)
+                self.children.remove(child)
             if isinstance(child, Node):
                 child.prune_tree()
                 if len(child) == 1:
+                    # There is no need for this node.we can prune internal
+                    # nodes with just on child
                     swap = child.children[0]
                     if child.negated:
                         swap.negate()
-                    self.remove(child)
-                    self._add(swap)
-                elif child:
-                    self._add(child) 
+                    self.children.remove(child)
+                elif not child:
+                    self.children.remove(child)

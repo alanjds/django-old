@@ -43,6 +43,12 @@ class Q(tree.Node):
     def __init__(self, *args, **kwargs):
         super(Q, self).__init__(children=list(args) + kwargs.items())
 
+    def _new_instance(cls, children=None, connector=None, negated=False):
+        obj = tree.Node(children, connector, negated)
+        obj.__class__ = cls
+        return obj
+    _new_instance = classmethod(_new_instance)
+
     def _combine(self, other, conn):
         if not isinstance(other, Q):
             raise TypeError(other)

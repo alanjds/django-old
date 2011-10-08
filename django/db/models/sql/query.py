@@ -1045,12 +1045,10 @@ class Query(object):
         elif hasattr(value, 'evaluate'):
             # If value is a query expression, evaluate it
             value = SQLEvaluator(value, self)
-            self.where.contains_aggregate = True
 
         for alias, aggregate in self.aggregates.items():
             if alias in (parts[0], LOOKUP_SEP.join(parts)):
-                self.where.add((aggregate, lookup_type, value), connetor)
-                self.where.contains_aggregate = True
+                self.where.add((aggregate, lookup_type, value), connector)
                 return
 
         opts = self.get_meta()

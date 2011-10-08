@@ -72,14 +72,16 @@ class SQLCompiler(object):
         try:
             where.final_prune(self.quote_name_unless_alias, self.connection)
         except FullResultSet:
-            where = self.query.where_class() 
+            where = None
 
-        if self.query.aggregates:
-            where, having_part = where.split_aggregates()
-            group_by = self.where_to_group_by(where)
-            return (where_part.as_sql(), having_part.as_sql(), group_by)
+        if self.query.aggregates and where:
+            having = self.query.where_class()
+            where.split_aggregates(having, False)
+            where.prune_tree(); having.prune_tree()
+            group_by = where.get_group_by(set())
+            return (where.as_sql(), having.as_sql(), group_by)
         else:
-            return (where.as_sql(), ('', []), set())
+            return (where and where.as_sql() or ('', []),  ('', []), set())
 
     def as_sql(self, with_limits=True, with_col_aliases=False):
         """

@@ -32,17 +32,7 @@ class Node(object):
     # We need this because of django.db.models.query_utils.Q. Q. __init__() is
     # problematic, but it is a natural Node subclass in all other respects.
     def _new_instance(cls, children=None, connector=None, negated=False):
-        """
-        This is called to create a new instance of this class when we need new
-        Nodes (or subclasses) in the internal code in this class. Normally, it
-        just shadows __init__(). However, subclasses with an __init__ signature
-        that is not an extension of Node.__init__ might need to implement this
-        method to allow a Node to create a new instance of them (if they have
-        any extra setting up to do).
-        """
-        obj = Node(children, connector, negated)
-        obj.__class__ = cls
-        return obj
+        return cls(children, connector, negated)
     _new_instance = classmethod(_new_instance)
 
     def clone(self, memo=None):

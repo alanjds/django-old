@@ -6,6 +6,7 @@ from itertools import repeat
 
 from django.utils import tree
 from django.db.models.fields import Field
+from django.db.models.sql.aggregates import AggregateField
 from datastructures import EmptyResultSet, FullResultSet
 
 # Connection types
@@ -25,15 +26,6 @@ class WhereNode(tree.Node):
     relabel_aliases() methods.
     """
     default = AND
-
-    def __init__(self, *args, **kwargs):
-        self.contains_aggregate = False
-        super(WhereNode, self).__init__(*args, **kwargs)
-
-    def clone(self, *args, **kwargs):
-        clone = super(WhereNode, self).clone(*args, **kwargs)
-        clone.contains_aggregate = self.contains_aggregate
-        return clone
 
     def add(self, data, connector):
         """
@@ -113,26 +105,26 @@ class WhereNode(tree.Node):
                 (empty_vals > 0 and self.connector == AND)):
             raise EmptyResultSet
 
-    def split_aggregates(self):
-        where = self._new_instance()
-        having = self._new_instance()
-        self._split_aggregates(where, having)
-        where.prune_tree()
-        having.prune_tree()
-        return where, having
-
-    def _split_aggregates(self, where, having):
-        if self.contains_aggregate:
-             having.add(self, connector=self.connector)
+    def split_aggregates(self, having, negated):
         if self.connector == OR:
              if self.subtree_contains_aggregate():
                  having.add(self, connector=OR)
-             else:
-                 where.add(self, connector=OR)
+                 self.parent.remove(self)
+                 if negated:
+                     having.netgate()
         else:
-             where.add(self, connector=AND)
-             for child in children:
-                 child._split_aggregates(where, having) 
+             if self.negated:
+                 negated = not negated
+             for child in self.children[:]:
+                 if hasattr(child, 'split_aggregates'):
+                     child.split_aggregates(having, negated) 
+                 elif child[0].contains_aggregate:
+                     if negated:
+                         neg_node = having.__class__([child])
+                         neg_node.negate()
+                         having.add(neg_node, AND)
+                     else:
+                         having.add(child, AND)
 
     def subtree_contains_aggregate(self):
         """
@@ -142,7 +134,7 @@ class WhereNode(tree.Node):
         for child in self.children:
             if isinstance(child, WhereNode) and self.subtree_contain_aggregate():
                 return True
-            elif child[2]:
+            if child[0].contains_aggregate:
                 return True
         return False
 
@@ -173,10 +165,10 @@ class WhereNode(tree.Node):
 
     def get_group_by(self, group_by):
         for child in self.children:
-             if isinstance(child, tuple) and isinstance(child[0], Constraint):
-                 group_by.add(child[0].alias, child[0].col)
+             if isinstance(child, tuple):
+                 group_by.add((child[0].alias, child[0].col))
              elif hasattr(child, 'get_group_by'):
-                 group_by.update(self.where_to_group_by(where))
+                 child.get_group_by(group_by)
         return group_by
 
     def make_atom(self, child, qn, connection):
@@ -316,6 +308,11 @@ class Constraint(object):
     """
     def __init__(self, alias, col, field):
         self.alias, self.col, self.field = alias, col, field
+        self.contains_aggregate = (
+            isinstance(alias, AggregateField) or
+           (hasattr(field, 'contains_aggregate') and field.contains_aggregate)
+        )
+                                   
 
     def __getstate__(self):
         """Save the state of the Constraint for pickling.

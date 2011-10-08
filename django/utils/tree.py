@@ -46,7 +46,7 @@ class Node(object):
                  child = child.clone(clone_leafs)
              elif clone_leafs and hasattr(child, 'clone'):
                  child = child.clone()
-             obj.childern.append(obj)
+             obj.children.append(child)
         obj.connector = self.connector
         obj.negated = self.negated
         return obj
@@ -108,15 +108,6 @@ class Node(object):
             obj = self._new_instance([node], conn_type)
             self.children.append(obj)
 
-    def remove(self, child):
-        self.children.remove(child)
-        if isinstance(child, Node):
-            child.parent = None
-
-    def remove_all_childrens(self):
-        for child in self.children:
-            self.remove(child)
-
     def negate(self):
         """
         Negate the sense of this node.
@@ -136,9 +127,10 @@ class Node(object):
                 if len(child) == 1:
                     # There is no need for this node.we can prune internal
                     # nodes with just on child
-                    swap = child.children[0]
+                    grandchild = child.children[0]
                     if child.negated:
-                        swap.negate()
+                        grantchild.negate()
                     self.children.remove(child)
+                    self.children.append(grandchild)
                 elif not child:
                     self.children.remove(child)

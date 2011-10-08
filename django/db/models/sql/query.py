@@ -1197,11 +1197,12 @@ class Query(object):
         # Start subtree if needed. At the end we check if anything got added
         # into the subtrees. If not, prune em.
         connector = q_object.connector
-        subtree = None
+        subtree_parent = None
         if self.where.connector <> connector or q_object.negated:
             subtree = self.where_class(connector=connector)
+            subtree_parent = self.where
             self.where.add(subtree, self.where.connector)
-            self.where = subtree 
+            self.where = subtree
         if q_object.negated:
             self.where.negate()
 
@@ -1222,8 +1223,8 @@ class Query(object):
 
         if connector == OR:
             self.promote_unused_aliases(refcounts_before, self.used_aliases)
-        if subtree:
-            self.where = self.where.parent
+        if subtree_parent:
+            self.where = subtree_parent
         self.where.prune_tree()
 
     def setup_joins(self, names, opts, alias, dupe_multis, allow_many=True,

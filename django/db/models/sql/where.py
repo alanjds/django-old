@@ -81,6 +81,7 @@ class WhereNode(tree.Node):
         self.children_sql = []
         self.children_params = []
         full_vals, empty_vals = 0, 0
+        condition_amount = len(self.children)
         # Make a copy - we are modifying at the same time.
         for child in self.children[:]:
             try:
@@ -105,10 +106,10 @@ class WhereNode(tree.Node):
         if self.negated:
             full_vals, empty_vals = empty_vals, full_vals
 
-        if ((full_vals > 0 and self.connector == OR)
-               (full_vals == len(self) and self.connector == AND)):
+        if ((full_vals > 0 and self.connector == OR) or
+               (full_vals == condition_amount and self.connector == AND)):
             raise FullResultSet
-        if ((empty_vals == len(self) and self.connector == OR) or
+        if ((empty_vals == condition_amount and self.connector == OR) or
                 (empty_vals > 0 and self.connector == AND)):
             raise EmptyResultSet
 

@@ -19,10 +19,6 @@ class Node(object):
         """
         Constructs a new Node. If no connector is given, the default will be
         used.
-
-        Warning: You probably don't want to pass in the 'negated' parameter. It
-        is NOT the same as constructing a node and calling negate() on the
-        result.
         """
         self.children = children and children[:] or []
         self.connector = connector or self.default
@@ -31,29 +27,38 @@ class Node(object):
 
     # We need this because of django.db.models.query_utils.Q. Q. __init__() is
     # problematic, but it is a natural Node subclass in all other respects.
+    # The __init__ of Q has different signature, and thus _new_instance of Q
+    # does call Q's version of __init__.
     def _new_instance(cls, children=None, connector=None, negated=False):
         return cls(children, connector, negated)
     _new_instance = classmethod(_new_instance)
 
-    def clone(self, memo=None):
+    def clone(self, clone_leafs=True):
         """
-        Clones the whole tree, not just the subtree. We have loops in
-        the tree due to keeping both parent and child links. Because
-        of this, we must keep a memo of objects already copied.
+        Clones the internal nodes of the tree. If also_leafs is False, does
+        not copy leaf nodes. This is a useful optimization for WhereNode
+        because WhereLeaf nodes do not need copying except when relabel_aliases
+        is called.
         """
-        if memo is None:
-            memo = {}
-        if self in memo:
-            return memo[self]
         obj = self._new_instance()
-        memo[self] = obj
-        for child in self.children:
+        # For performance reasons we do not want to
+        # call _add for the leaf nodes - thus we copy
+        # the list, and instead of adding all the cloned
+        # nodes, we remove the internal nodes and add the
+        # external nodes.
+        if not clone_leafs:
+            leaf_children = [c for c in self.children if c.is_leaf]
+            copy = [c for c in self.children if not c.is_leaf]
+        else:
+            leaf_children = []
+            copy = self.children
+        for child in copy:
              if isinstance(child, Node):
-                 child = child.clone(memo=memo)
+                 child = child.clone(clone_leafs)
+             elif clone_leafs and hasattr(child, 'clone'):
+                 child = child.clone()
              obj._add(child)
-        if self.parent is not None:
-            new_parent = self.parent.clone(memo=memo)
-            obj.parent = new_parent
+        obj.children.extend(leaf_children) 
         obj.connector = self.connector
         obj.negated = self.negated
         return obj
@@ -129,14 +134,16 @@ class Node(object):
             self._add(node)
         else:
             obj = self._new_instance([node], conn_type)
-            obj2 = self.clone()
-            self._add(obj, obj2)
+            self._add(obj)
 
     def remove(self, child):
-        assert child in self.children
         self.children.remove(child)
         if isinstance(child, Node):
             child.parent = None
+
+    def remove_all_childrens(self):
+        for child in self.children:
+            self.remove(child)
 
     def negate(self):
         """
@@ -144,27 +151,21 @@ class Node(object):
         """
         self.negated = not self.negated
 
-    def subtree(self, conn_type):
-        obj = self._new_instance()
-        obj.connector = conn_type
-        obj.parent = self
-        self.children.append(obj)
-        return obj
-
-    def prune_tree(self, recurse=False):
+    def prune_tree(self):
         """
         Removes empty children nodes, and non-necessary intermediatry
-        nodes from this node. If recurse is true, will recurse down
-        the tree.
+        nodes from this node.
         """
-        old_childs = self.children[:]
-        self.children = []
-        for child in old_childs:
+        for child in self.children[:]:
             if not child:
-                continue
+                self.remove(child)
             if isinstance(child, Node):
-                if recurse:
-                    child.prune_tree(recurse=True)
-                if not child.negated and len(child) == 1:
-                    child = child.children[0]
-            self._add(child)
+                child.prune_tree()
+                if len(child) == 1:
+                    swap = child.children[0]
+                    if child.negated:
+                        swap.negate()
+                    self.remove(child)
+                    self._add(swap)
+                elif child:
+                    self._add(child) 

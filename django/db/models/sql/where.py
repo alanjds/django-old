@@ -18,8 +18,6 @@ class WhereLeaf(object):
     Represents a leaf node in a where tree. Contains single constrain,
     and knows how to turn it into sql and params.
     """
-    __slots__ = ['sql', 'data', 'params', 'negated', 'is_leaf', 'match_all',
-                 'match_nothing']
     # We could ofcourse test isinstance, but this is prettier.
     is_leaf = True
 
@@ -29,31 +27,37 @@ class WhereLeaf(object):
         self.params = []
         self.match_all = False
         self.match_nothing = False
-        obj, lookup_type, value = data
-
-        # Preprocess the data
-        if hasattr(value, '__iter__') and hasattr(value, 'next'):
-            # Consume any generators immediately, so that we can determine
-            # emptiness and transform any non-empty values correctly.
-            value = list(value)
-
-        # The "annotation" parameter is used to pass auxilliary information
-        # about the value(s) to the query construction. Specifically, datetime
-        # and empty values need special handling. Other types could be used
-        # here in the future (using Python types is suggested for consistency).
-        if isinstance(value, datetime.datetime):
-            annotation = datetime.datetime
-        elif hasattr(value, 'value_annotation'):
-            annotation = value.value_annotation
+        if not isinstance(data, (list, tuple)):
+            self.data = data
         else:
-            annotation = bool(value)
+            # Preprocess the data
+            obj, lookup_type, value = data
 
-        if hasattr(obj, "prepare"):
-            value = obj.prepare(lookup_type, value)
-        self.data = (obj, lookup_type, annotation, value) 
+            if hasattr(value, '__iter__') and hasattr(value, 'next'):
+                # Consume any generators immediately, so that we can determine
+                # emptiness and transform any non-empty values correctly.
+                value = list(value)
+
+            # The "annotation" parameter is used to pass auxilliary information
+            # about the value(s) to the query construction. Specifically, datetime
+            # and empty values need special handling. Other types could be used
+            # here in the future (using Python types is suggested for consistency).
+            if isinstance(value, datetime.datetime):
+                annotation = datetime.datetime
+            elif hasattr(value, 'value_annotation'):
+                annotation = value.value_annotation
+            else:
+                annotation = bool(value)
+
+            if hasattr(obj, "prepare"):
+                value = obj.prepare(lookup_type, value)
+            self.data = (obj, lookup_type, annotation, value) 
 
     def create_sql(self, qn, connection):
-        self.sql, self.params = self.make_atom(qn, connection)
+        if hasattr(self.data, 'as_sql'):
+            self.sql, self.params = self.data.as_sql(qn, connection)
+        else:
+            self.sql, self.params = self.make_atom(qn, connection)
         if self.negated and self.sql:
             self.sql = 'NOT ' + self.sql
 
@@ -159,6 +163,35 @@ class WhereLeaf(object):
             lhs = qn(name)
         return connection.ops.field_cast_sql(db_type) % lhs
 
+    def relabel_aliases(self, change_map):
+        if isinstance(self.data[0], (list, tuple)):
+            elt = list(self.data[0])
+            if elt[0] in change_map:
+                elt[0] = change_map[elt[0]]
+                self.data = (tuple(elt),) + self.data[1:]
+        else:
+            self.data[0].relabel_aliases(change_map)
+
+            # Check if the query value also requires relabelling
+            if hasattr(self.data[3], 'relabel_aliases'):
+                self.data[3].relabel_aliases(change_map)
+    
+    def clone(self):
+        clone = self.__class__(None, self.negated)
+        if hasattr(self.data[3], 'clone'):
+            new_data3 = self.data[3].clone()
+        else:
+            new_data3 = self.data[3]
+        clone.data = (self.data[0].clone(), self.data[1], self.data[2], new_data3)
+        return clone
+
+    def negate(self):
+        self.negated = not self.negated
+
+    def __str__(self):
+        return "%s%s, %s, %s" % (self.negated and 'NOT: ' or '',
+                                 self.data[0], self.data[1], self.data[3])
+
 class WhereNode(tree.Node):
     """
     Used to represent the SQL where-clause.
@@ -171,8 +204,6 @@ class WhereNode(tree.Node):
     params]. However, a child could also be any class with as_sql() and
     relabel_aliases() methods.
     """
-    __slots__ = ['children', 'parent' 'connector', 'negated',
-                 'is_leaf', 'match_all', 'match_nothing']
 
     default = AND
     is_leaf = False
@@ -209,13 +240,13 @@ class WhereNode(tree.Node):
             if child.match_all:
                  if self.connector == OR:
                      self.match_all = True
-                     self.remove_all_childs()
+                     self.remove_all_children()
                      break
                  self.remove(child)
             if child.match_nothing:
                  if self.connector == AND:
                      self.match_nothing = True
-                     self.remove_all_childs()
+                     self.remove_all_children()
                      break
                  self.remove(child)
         if not self.children:
@@ -289,25 +320,8 @@ class WhereNode(tree.Node):
         Relabels the alias values of any children. 'change_map' is a dictionary
         mapping old (current) alias values to the new values.
         """
-        if not node:
-            node = self
-        for pos, child in enumerate(node.children):
-            if hasattr(child, 'relabel_aliases'):
-                child.relabel_aliases(change_map)
-            elif isinstance(child, tree.Node):
-                self.relabel_aliases(change_map, child)
-            elif isinstance(child, (list, tuple)):
-                if isinstance(child[0], (list, tuple)):
-                    elt = list(child[0])
-                    if elt[0] in change_map:
-                        elt[0] = change_map[elt[0]]
-                        node.children[pos] = (tuple(elt),) + child[1:]
-                else:
-                    child[0].relabel_aliases(change_map)
-
-                # Check if the query value also requires relabelling
-                if hasattr(child[3], 'relabel_aliases'):
-                    child[3].relabel_aliases(change_map)
+        for child in self.children:
+            child.relabel_aliases(change_map)
 
 class ExtraWhere(object):
     def __init__(self, sqls, params):
@@ -325,7 +339,6 @@ class Constraint(object):
     An object that can be passed to WhereNode.add() and knows how to
     pre-process itself prior to including in the WhereNode.
     """
-    __slots__ = ['alias', 'col', 'field']
     
     def __init__(self, alias, col, field):
         self.alias, self.col, self.field = alias, col, field
@@ -390,3 +403,6 @@ class Constraint(object):
 
     def clone(self):
         return Constraint(self.alias, self.col, self.field)
+
+    def __str__(self):
+        return "%s.%s" % (self.alias, self.col)

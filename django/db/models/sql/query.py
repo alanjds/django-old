@@ -254,7 +254,11 @@ class Query(object):
         obj.dupe_avoidance = self.dupe_avoidance.copy()
         obj.select = self.select[:]
         obj.tables = self.tables[:]
-        obj.where = self.where.clone()
+        # We do not need to clone the leaf nodes - they are immutable until
+        # the query is executed, or relabel_alias is called. In either case
+        # we will take care of the copying where needed. This can be a major
+        # speed optimization when the where three has a lot of leaf nodes.
+        obj.where = self.where.clone(clone_leafs=False)
         obj.where_class = self.where_class
         obj.order_by = self.order_by[:]
         obj.low_mark, obj.high_mark = self.low_mark, self.high_mark
@@ -509,7 +513,6 @@ class Query(object):
             # the root node's connector must always be AND
             if self.where.connector == OR:
                 self.where = self.where_class([self.where])
-            self.where.prune_tree(recurse=True)
 
         # Selection columns and extra extensions are those provided by 'rhs'.
         self.select = []
@@ -1130,7 +1133,7 @@ class Query(object):
                             j_col = self.alias_map[alias][RHS_JOIN_COL]
                             self.add_where_leaf(
                                 (Constraint(alias, j_col, None), 'isnull', True),
-                                negate=True
+                                negated=True
                             )
                             break
                 if not (lookup_type == 'in'
@@ -1193,11 +1196,12 @@ class Query(object):
 
         # Start subtree if needed. At the end we check if anything got added
         # into the subtrees. If not, prune em.
-        where_subtree = False
         connector = q_object.connector
+        subtree = None
         if self.where.connector <> connector or q_object.negated:
-            self.where = self.where.subtree(q_object.connector)
-            where_subtree = True
+            subtree = self.where_class(connector=connector)
+            self.where.add(subtree, self.where.connector)
+            self.where = subtree 
         if q_object.negated:
             self.where.negate()
 
@@ -1218,9 +1222,9 @@ class Query(object):
 
         if connector == OR:
             self.promote_unused_aliases(refcounts_before, self.used_aliases)
-        if where_subtree:
+        if subtree:
             self.where = self.where.parent
-            self.where.prune_tree()
+        self.where.prune_tree()
 
     def setup_joins(self, names, opts, alias, dupe_multis, allow_many=True,
             allow_explicit_fk=False, can_reuse=None, negate=False,
@@ -1242,6 +1246,10 @@ class Query(object):
         column (used for any 'where' constraint), the final 'opts' value and the
         list of tables joined.
         """
+        from django.conf import settings
+        #if settings.DEBUG == True:
+        #    import ipdb; ipdb.set_trace()
+        
         joins = [alias]
         last = [0]
         dupe_set = set()

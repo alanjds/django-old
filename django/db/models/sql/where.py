@@ -208,17 +208,6 @@ class WhereNode(tree.Node):
     default = AND
     is_leaf = False
 
-    def __init__(self, *args, **kwargs):
-        super(WhereNode, self).__init__(*args, **kwargs)
-        self.match_all = False
-        self.match_nothing = False
-
-    def clone(self, *args, **kwargs):
-        c = super(WhereNode, self).clone(*args, **kwargs)
-        c.match_all = self.match_all
-        c.match_nothing = self.match_nothing
-        return c
-
     def leaf_class(cls):
         # Subclass hook
         return WhereLeaf
@@ -232,6 +221,11 @@ class WhereNode(tree.Node):
         Due to the fact that the only way to get to know that is calling
         as_sql(), we will at the same time turn the leaf nodes into sql.
         """
+        # There variables make sense only in the context of the final prune.
+        # There is no need to clone them, and there is no need to have them
+        # elsewhere. So, define them here instead of __init__.
+        self.match_all = False
+        self.match_nothing = False
         for child in self.children:
             if child.is_leaf:
                 child.create_sql(qn, connection)

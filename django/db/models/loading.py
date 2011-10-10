@@ -213,7 +213,7 @@ class AppCache(object):
             self._populate()
         if only_installed and app_label not in self.app_labels:
             return None
-        return self.app_models.get(app_label, SortedDict()).get(model_name.lower())
+        return self.app_models.get(app_label, {}).get(model_name.lower())
 
     def register_models(self, app_label, *models):
         """

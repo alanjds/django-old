@@ -273,7 +273,8 @@ class Options(object):
         the deferred_fields list and then delete the _init_attname_cache.
         Next access to get_init_fields() will reload that cache.
         """
-        self.only_load = fields
+        self.only_load = [f.attname for f in self.fields
+                          if f.attname not in fields]
         del self._init_attname_cache
 
     def _many_to_many(self):

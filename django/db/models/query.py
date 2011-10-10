@@ -1452,12 +1452,13 @@ class RawQuerySet(object):
             model_cls = deferred_class_factory(self.model, skip)
         else:
             model_cls = self.model
-            # All model's fields are present in the query. So, it is possible
-            # to use *args based model instantation. For each field of the model,
-            # record the query column position matching that field.
-            model_init_field_pos = []
-            for field in self.model._meta.fields:
-                model_init_field_pos.append(model_init_field_names[field.attname])
+        # For each field of the model, record the query column position matching
+        # that field. Note that we must use the get_init_attnames() method of
+        # the above fetched model_cls, because if it is a deferred model class
+        # its __init__ will expect the field in get_init_attnames order.
+        model_init_field_pos = []
+        for attname in model_cls._meta.get_init_attnames():
+            model_init_field_pos.append(model_init_field_names[attname])
         if need_resolv_columns:
             fields = [self.model_fields.get(c, None) for c in self.columns]
         # Begin looping through the query values.
@@ -1465,14 +1466,8 @@ class RawQuerySet(object):
             if need_resolv_columns:
                 values = compiler.resolve_columns(values, fields)
             # Associate fields to values
-            if skip:
-                model_init_kwargs = {}
-                for attname, pos in model_init_field_names.iteritems():
-                    model_init_kwargs[attname] = values[pos]
-                instance = model_cls(**model_init_kwargs)
-            else:
-                model_init_args = [values[pos] for pos in model_init_field_pos]
-                instance = model_cls(*model_init_args)
+            model_init_args = [values[pos] for pos in model_init_field_pos]
+            instance = model_cls(*model_init_args)
             if annotation_fields:
                 for column, pos in annotation_fields:
                     setattr(instance, column, values[pos])

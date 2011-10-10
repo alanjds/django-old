@@ -1249,6 +1249,8 @@ def get_klass_info(klass, max_depth=0, cur_depth=0, requested=None,
     else:
         load_fields = None
 
+    # TODO - Due to removal of special handling of deferred model's __init__
+    # we could probably do some cleanup here.
     if load_fields:
         # Handle deferred fields.
         skip = set()
@@ -1337,10 +1339,7 @@ def get_cached_row(row, index_start, using,  klass_info, offset=0):
     if fields == (None,) * field_count:
         obj = None
     else:
-        if field_names:
-            obj = klass(**dict(zip(field_names, fields)))
-        else:
-            obj = klass(*fields)
+        obj = klass(*fields)
 
     # If an object was retrieved, set the database state.
     if obj:

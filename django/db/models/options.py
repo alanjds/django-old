@@ -44,7 +44,8 @@ class Options(object):
         self.parents = SortedDict()
         self.duplicate_targets = {}
         self.auto_created = False
-        # Deferred models want to use only a portion of all the fields
+        # Deferred models want to use only a portion of all the fields.
+        # This is a list of fields.attnames we want to load.
         self.only_load = []
 
         # To handle various inheritance situations, we need to track where
@@ -267,14 +268,17 @@ class Options(object):
         else:
             self._init_attname_cache = tuple([x.attname for x, _ in cache])
 
-    def set_loaded_fields(self, fields):
+    def set_loaded_fields(self, defer):
         """
         Deferred model class creation will call this method. This will set
         the deferred_fields list and then delete the _init_attname_cache.
         Next access to get_init_fields() will reload that cache.
         """
+        # Due to some strange things in select_related query.py iterator
+        # we can be called with a list of defer fields which can be either
+        # attnames or or field names. TODO: Fix this (in query.py)
         self.only_load = [f.attname for f in self.fields
-                          if f.attname not in fields]
+                          if f.name not in defer and f.attname not in defer]
         del self._init_attname_cache
 
     def _many_to_many(self):

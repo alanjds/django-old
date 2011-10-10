@@ -273,10 +273,10 @@ class QuerySet(object):
                 if field.name not in load_fields:
                     skip.add(field.attname)
             model_cls = deferred_class_factory(self.model, skip)
-
+        else:
+            model_cls = self.model
         # Cache db and model outside the loop
         db = self.db
-        model_cls = self.model
         compiler = self.query.get_compiler(using=db)
         if fill_cache:
             klass_info = get_klass_info(model_cls, max_depth=max_depth,

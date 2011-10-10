@@ -45,7 +45,7 @@ class Options(object):
         self.duplicate_targets = {}
         self.auto_created = False
         # Deferred models want to use only a portion of all the fields
-        self.deferred_fields = []
+        self.deferred_fields = set()
 
         # To handle various inheritance situations, we need to track where
         # managers came from (concrete or abstract base classes).
@@ -270,6 +270,9 @@ class Options(object):
         the deferred_fields list and then delete the _init_attname_cache.
         Next access to get_init_fields() will reload that cache.
         """
+        if self.deferred_fields:
+            # Already set - nothing to do
+            return
         self.deferred_fields = [a for a in self.get_init_attnames() if a in fields]
         del self._init_attname_cache
 

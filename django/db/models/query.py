@@ -279,7 +279,7 @@ class QuerySet(object):
         db = self.db
         compiler = self.query.get_compiler(using=db)
         if fill_cache:
-            klass_info = get_klass_info(model_cls, max_depth=max_depth,
+            klass_info = get_klass_info(self.model, max_depth=max_depth,
                                         requested=requested, only_load=only_load)
         for row in compiler.results_iter():
             if fill_cache:

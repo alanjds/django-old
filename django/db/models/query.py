@@ -265,37 +265,29 @@ class QuerySet(object):
         index_start = len(extra_select)
         aggregate_start = index_start + len(load_fields or self.model._meta.fields)
 
-        skip = None
         if load_fields and not fill_cache:
             # Some fields have been deferred, so we have to initialise
             # via keyword arguments.
             skip = set()
-            init_list = []
             for field in fields:
                 if field.name not in load_fields:
                     skip.add(field.attname)
-                else:
-                    init_list.append(field.attname)
             model_cls = deferred_class_factory(self.model, skip)
 
         # Cache db and model outside the loop
         db = self.db
-        model = self.model
+        model_cls = self.model
         compiler = self.query.get_compiler(using=db)
         if fill_cache:
-            klass_info = get_klass_info(model, max_depth=max_depth,
+            klass_info = get_klass_info(model_cls, max_depth=max_depth,
                                         requested=requested, only_load=only_load)
         for row in compiler.results_iter():
             if fill_cache:
                 obj, _ = get_cached_row(row, index_start, db, klass_info,
                                         offset=len(aggregate_select))
             else:
-                if skip:
-                    row_data = row[index_start:aggregate_start]
-                    obj = model_cls(**dict(zip(init_list, row_data)))
-                else:
-                    # Omit aggregates in object creation.
-                    obj = model(*row[index_start:aggregate_start])
+                # Omit aggregates in object creation.
+                obj = model_cls(*row[index_start:aggregate_start])
 
                 # Store the source database of the object
                 obj._state.db = db

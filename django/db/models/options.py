@@ -45,7 +45,7 @@ class Options(object):
         self.duplicate_targets = {}
         self.auto_created = False
         # Deferred models want to use only a portion of all the fields
-        self.deferred_fields = set()
+        self.only_load = []
 
         # To handle various inheritance situations, we need to track where
         # managers came from (concrete or abstract base classes).
@@ -259,21 +259,21 @@ class Options(object):
         cache.extend([(f, None) for f in self.local_fields])
         self._field_cache = tuple(cache)
         self._field_name_cache = [x for x, _ in cache]
-        self._init_attname_cache = tuple(
-            [x.attname for x, _ in cache 
-             if x.attname not in self.deferred_fields]
-        )
-    
+        if self.only_load:
+            self._init_attname_cache = tuple(
+                [x.attname for x, _ in cache 
+                 if x.attname in self.only_load]
+            )
+        else:
+            self._init_attname_cache = tuple([x.attname for x, _ in cache])
+
     def set_loaded_fields(self, fields):
         """
         Deferred model class creation will call this method. This will set
         the deferred_fields list and then delete the _init_attname_cache.
         Next access to get_init_fields() will reload that cache.
         """
-        if self.deferred_fields:
-            # Already set - nothing to do
-            return
-        self.deferred_fields = [a for a in self.get_init_attnames() if a in fields]
+        self.only_load = fields
         del self._init_attname_cache
 
     def _many_to_many(self):

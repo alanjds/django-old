@@ -44,6 +44,8 @@ class Options(object):
         self.parents = SortedDict()
         self.duplicate_targets = {}
         self.auto_created = False
+        # Deferred models want to use only a portion of all the fields
+        self.deferred_fields = []
 
         # To handle various inheritance situations, we need to track where
         # managers came from (concrete or abstract base classes).
@@ -105,6 +107,8 @@ class Options(object):
             self.db_table = "%s_%s" % (self.app_label, self.module_name)
             self.db_table = truncate_name(self.db_table, connection.ops.max_name_length())
 
+         
+
     def _prepare(self, model):
         if self.order_with_respect_to:
             self.order_with_respect_to = self.get_field(self.order_with_respect_to)
@@ -164,6 +168,7 @@ class Options(object):
             if hasattr(self, '_field_cache'):
                 del self._field_cache
                 del self._field_name_cache
+                del self._init_attname_cache
 
         if hasattr(self, '_name_map'):
             del self._name_map
@@ -231,6 +236,18 @@ class Options(object):
             self._fill_fields_cache()
         return self._field_cache
 
+    def get_init_attnames(self):
+        """
+        Returns a sequence of attribute names for model initialization. Note
+        that for deferred models this list contains just the loaded field
+        attribute names, not all of the model's attnames.
+        """
+        try:
+            self._init_attname_cache
+        except AttributeError:
+            self._fill_fields_cache()
+        return self._init_attname_cache
+    
     def _fill_fields_cache(self):
         cache = []
         for parent in self.parents:
@@ -242,6 +259,19 @@ class Options(object):
         cache.extend([(f, None) for f in self.local_fields])
         self._field_cache = tuple(cache)
         self._field_name_cache = [x for x, _ in cache]
+        self._init_attname_cache = tuple(
+            [x.attname for x, _ in cache 
+             if x.attname not in self.deferred_fields]
+        )
+    
+    def set_loaded_fields(self, fields):
+        """
+        Deferred model class creation will call this method. This will set
+        the deferred_fields list and then delete the _init_attname_cache.
+        Next access to get_init_fields() will reload that cache.
+        """
+        self.deferred_fields = [a for a in self.get_init_attnames() if a in fields]
+        del self._init_attname_cache
 
     def _many_to_many(self):
         try:

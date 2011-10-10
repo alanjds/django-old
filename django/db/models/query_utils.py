@@ -162,7 +162,9 @@ def deferred_class_factory(model, attrs):
     overrides["Meta"] = Meta
     overrides["__module__"] = model.__module__
     overrides["_deferred"] = True
-    return type(name, (model,), overrides)
+    deferred_model = type(name, (model,), overrides)
+    deferred_model._meta.set_loaded_fields(attrs)
+    return deferred_model
 
 # The above function is also used to unpickle model instances with deferred
 # fields.

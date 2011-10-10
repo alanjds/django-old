@@ -140,22 +140,28 @@ def select_related_descend(field, restricted, requested, reverse=False):
 # This function is needed because data descriptors must be defined on a class
 # object, not an instance, to have any effect.
 
+_deferred_class_cache = {}
 def deferred_class_factory(model, attrs):
     """
     Returns a class object that is a copy of "model" with the specified "attrs"
     being replaced with DeferredAttribute objects. The "pk_value" ties the
     deferred attributes to a particular instance of the model.
     """
-    class Meta:
-        proxy = True
-        app_label = model._meta.app_label
-
     # The app_cache wants a unique name for each model, otherwise the new class
     # won't be created (we get an old one back). Therefore, we generate the
     # name using the passed in attrs. It's OK to reuse an existing class
     # object if the attrs are identical.
     name = "%s_Deferred_%s" % (model.__name__, '_'.join(sorted(list(attrs))))
     name = util.truncate_name(name, 80, 32)
+    # Lets avoid unecessary repetitive work and use a cache
+    global _deferred_class_cache
+    if name in _deferred_class_cache:
+        return _deferred_class_cache[name]
+
+    class Meta:
+        proxy = True
+        app_label = model._meta.app_label
+
 
     overrides = dict([(attr, DeferredAttribute(attr, model))
             for attr in attrs])
@@ -164,6 +170,7 @@ def deferred_class_factory(model, attrs):
     overrides["_deferred"] = True
     deferred_model = type(name, (model,), overrides)
     deferred_model._meta.set_loaded_fields(attrs)
+    _deferred_class_cache[name] = deferred_model
     return deferred_model
 
 # The above function is also used to unpickle model instances with deferred

@@ -117,9 +117,22 @@ class RenderContext(BaseContext):
     rendering of other templates as they would if they were stored in the normal
     template context.
     """
+    def __init__(self, *args, **kwargs):
+        # Keep track how much content is generated already.
+        self.pos = 0
+        # A dict of name -> list of (start, end) positions to rewrite
+        self.rewritable_parts = {}
+        super(RenderContext, self).__init__(*args, **kwargs)
+
     def __iter__(self):
         for d in self.dicts[-1]:
             yield d
+
+    def add_rewritable(self, name, start, end):
+       if name in self.rewritable_parts:
+           self.rewritable_parts[name].append((start, end))
+       else:
+           self.rewritable_parts[name] = [(start, end)] 
 
     def has_key(self, key):
         return key in self.dicts[-1]

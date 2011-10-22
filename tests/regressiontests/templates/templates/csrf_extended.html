@@ -1,0 +1,19 @@
+{% extends "csrf_base.html" %}
+{% block header %}
+  {% csrf_token %}
+  {% with 'ANOT' as csrf_token %}
+  {{ block.super }}
+  {% endwith %}
+{% endblock %}
+
+{% block body %}
+    {{ block.super }}
+    {% if include_test %}
+        {% include "csrf_include.html" %}
+    {% endif %}
+    {% if rewritable_test %}
+        {% rewritable hello_user %}
+            Hello, SomeUser
+        {% endrewritable %}
+    {% endif %}
+{% endblock %}

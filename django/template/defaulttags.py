@@ -44,7 +44,12 @@ class CsrfTokenNode(Node):
             if csrf_token == 'NOTPROVIDED':
                 return mark_safe(u"")
             else:
-                return mark_safe(u"<div style='display:none'><input type='hidden' name='csrfmiddlewaretoken' value='%s' /></div>" % csrf_token)
+                csrf_token_str = unicode(csrf_token)
+                start_part = u"<div style='display:none'><input type='hidden' name='csrfmiddlewaretoken' value='"
+                start_pos = context.render_context.pos + len(start_part)
+                end_pos = start_pos + len(csrf_token_str)
+                context.render_context.add_rewritable('csrf_token', start_pos, end_pos)
+                return mark_safe(start_part + csrf_token_str + "' /></div>")
         else:
             # It's very probable that the token is missing because of
             # misconfiguration, so we raise a warning
@@ -300,6 +305,26 @@ def include_is_allowed(filepath):
         if filepath.startswith(root):
             return True
     return False
+
+class RewrittableNode(Node):
+
+    def __init__(self, nodelist, name):
+        self.nodelist = nodelist
+        self.name = name
+
+    def __repr__(self):
+        return "<Rewrittable node>"
+
+    def __iter__(self):
+        for node in self.nodelist:
+            yield node
+
+    def render(self, context):
+        start_pos = context.render_context.pos
+        ret = self.nodelist.render(context)
+        end_pos = context.render_context.pos
+        context.render_context.add_rewritable(self.name, start_pos, end_pos)
+        return ret
 
 class SsiNode(Node):
     def __init__(self, filepath, parsed, legacy_filepath=True):
@@ -1084,6 +1109,33 @@ def regroup(parser, token):
 
     var_name = lastbits_reversed[0][::-1]
     return RegroupNode(target, expression, var_name)
+
+@register.tag
+def rewritable(parser, token):
+    """
+    Rewrittable marks part of the template as rewritable. This is useful for
+    example in caching, where you might want to change only a small portion of
+    the page per user.
+
+    Example usage:
+    {% rewritable hello_user %}
+        Hello, {{user}} 
+    {% endrewritable %}
+
+    When the template is loaded from cach, the cache middleware might rewrite
+    this using
+      rewritten = cached.rewrite({'hello_user': 'Hello, %s' % current_user})
+    where Hello, user_when_cached will be rewritten to Hello, current_user.
+    That is, the response will have a greet for the current user instead of
+    the user who initiated the caching. Rest of the content will be loaded
+    from the cache.
+    """
+    bits = token.contents.split()
+    if len(bits) != 2:
+        raise TemplateSyntaxError("'rewritable' tag takes one argument")
+    nodelist = parser.parse(('endrewritable',))
+    parser.delete_first_token()
+    return RewrittableNode(nodelist, bits[1])
 
 @register.tag
 def spaceless(parser, token):

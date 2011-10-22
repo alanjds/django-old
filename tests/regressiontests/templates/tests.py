@@ -37,6 +37,7 @@ from unicode import UnicodeTests
 from nodelist import NodelistTest, ErrorIndexTest
 from smartif import *
 from response import *
+from rewritable import CSRFRewritableTest
 
 try:
     from loaders import *

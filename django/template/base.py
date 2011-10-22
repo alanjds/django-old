@@ -12,7 +12,7 @@ from django.utils.text import (smart_split, unescape_string_literal,
 from django.utils.encoding import smart_unicode, force_unicode, smart_str
 from django.utils.translation import ugettext_lazy
 from django.utils.safestring import (SafeData, EscapeData, mark_safe,
-    mark_for_escaping)
+    mark_for_escaping, SafeUnicode)
 from django.utils.formats import localize
 from django.utils.html import escape
 from django.utils.module_loading import module_has_submodule
@@ -109,6 +109,47 @@ class StringOrigin(Origin):
     def reload(self):
         return self.source
 
+class RewrittableContent(SafeUnicode):
+    # Need a proper way to handle __init__ here, maybe a wrapper object
+    # would be the way to go?
+    def rewrite(self, overwrite_dict):
+        """
+        TODO: handle nested overwritten parts. Currently we will fail
+        horribly...
+        """
+        # Lets find overwrite positions first.
+        overwrite_positions = []
+        for name, parts in self.rewritable_parts.items():
+            for part in parts:
+                overwrite_positions.append((part[0], part[1], name))
+        overwrite_positions.sort()
+        prev_end = 0
+        # Append the not-overwrittable positions
+        all_split_positions = []
+        for ow_start, ow_end, name in overwrite_positions:
+            if ow_start > prev_end:
+                all_split_positions.append((prev_end, ow_start, None))
+            elif ow_start < start:
+                raise Exception("Nested rewritable part? Not supported...")
+            else:
+                # Next part starts immediately, do nothing.
+                pass
+            all_split_positions.append((ow_start, ow_end, name))
+            prev_end = ow_end
+        if prev_end < len(self):
+            all_split_positions.append((prev_end, len(self), None))
+        # now just rewrite the parts
+        ret_parts = []
+        for start, end, name in all_split_positions:
+            if name:
+                # In current implementation all parts MUST be rewritten,
+                # it would be nice to return another RewrittableContent from
+                # here...
+                ret_parts.append(overwrite_dict[name])
+            else:
+                ret_parts.append(self[start:end])
+        return mark_safe(u''.join(ret_parts))
+
 class Template(object):
     def __init__(self, template_string, origin=None,
                  name='<Unknown Template>'):
@@ -132,9 +173,13 @@ class Template(object):
 
     def render(self, context):
         "Display stage -- can be called many times"
+        cur_pos = context.render_context.pos
         context.render_context.push()
         try:
-            return self._render(context)
+            ret = RewrittableContent(self._render(context))
+            assert len(ret) == context.render_context.pos - cur_pos
+            ret.rewritable_parts = context.render_context.rewritable_parts
+            return ret
         finally:
             context.render_context.pop()
 
@@ -813,11 +858,17 @@ class NodeList(list):
     def render(self, context):
         bits = []
         for node in self:
+            # We need to track the position as seen by this node - internal
+            # nodes can increment the position, but we want to keep count of
+            # the total change made by the node below.
+            prev_pos = context.render_context.pos
             if isinstance(node, Node):
                 bit = self.render_node(node, context)
             else:
                 bit = node
-            bits.append(force_unicode(bit))
+            unicoded = force_unicode(bit)
+            context.render_context.pos = prev_pos + len(unicoded)
+            bits.append(unicoded)
         return mark_safe(u''.join(bits))
 
     def get_nodes_by_type(self, nodetype):

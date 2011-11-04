@@ -342,13 +342,6 @@ class ModelAdmin(BaseModelAdmin):
         self.model = model
         self.opts = model._meta
         self.admin_site = admin_site
-        if 'action_checkbox' not in self.list_display and self.actions is not None:
-            self.list_display = ['action_checkbox'] +  list(self.list_display)
-        if not self.list_display_links:
-            for name in self.list_display:
-                if name != 'action_checkbox':
-                    self.list_display_links = [name]
-                    break
         super(ModelAdmin, self).__init__()
 
     def get_inline_instances(self, request):
@@ -657,6 +650,18 @@ class ModelAdmin(BaseModelAdmin):
         """
         return self.list_display
 
+    def get_list_display_links(self, request, list_display):
+        """
+        Return a sequence containing the fields to be displayed as links
+        on the changelist. The list_display parameter is the list of fields
+        returned by get_list_display().
+        """
+        if self.list_display_links or not list_display:
+            return self.list_display_links
+        else:
+            # Use only the first item in list_display as link
+            return list(list_display)[:1]
+
     def construct_change_message(self, request, form, formsets):
         """
         Construct a change message from a changed object.
@@ -774,7 +779,9 @@ class ModelAdmin(BaseModelAdmin):
             return HttpResponseRedirect(post_url_continue % pk_value)
 
         if "_popup" in request.POST:
-            return HttpResponse('<script type="text/javascript">opener.dismissAddAnotherPopup(window, "%s", "%s");</script>' % \
+            return HttpResponse(
+                '<!DOCTYPE html><html><head><title></title></head><body>'
+                '<script type="text/javascript">opener.dismissAddAnotherPopup(window, "%s", "%s");</script></body></html>' % \
                 # escape() calls force_unicode.
                 (escape(pk_value), escapejs(obj)))
         elif "_addanother" in request.POST:
@@ -1094,29 +1101,31 @@ class ModelAdmin(BaseModelAdmin):
 
     @csrf_protect_m
     def changelist_view(self, request, extra_context=None):
-        "The 'change list' admin view for this model."
+        """
+        The 'change list' admin view for this model.
+        """
         from django.contrib.admin.views.main import ERROR_FLAG
         opts = self.model._meta
         app_label = opts.app_label
         if not self.has_change_permission(request, None):
             raise PermissionDenied
 
+        list_display = self.get_list_display(request)
+        list_display_links = self.get_list_display_links(request, list_display)
+
         # Check actions to see if any are available on this changelist
         actions = self.get_actions(request)
-
-        # Remove action checkboxes if there aren't any actions available.
-        list_display = list(self.get_list_display(request))
-        if not actions:
-            try:
-                list_display.remove('action_checkbox')
-            except ValueError:
-                pass
+        if actions:
+            # Add the action checkboxes if there are any actions available.
+            list_display = ['action_checkbox'] +  list(list_display)
 
         ChangeList = self.get_changelist(request)
         try:
-            cl = ChangeList(request, self.model, list_display, self.list_display_links,
-                self.list_filter, self.date_hierarchy, self.search_fields,
-                self.list_select_related, self.list_per_page, self.list_max_show_all, self.list_editable, self)
+            cl = ChangeList(request, self.model, list_display,
+                list_display_links, self.list_filter, self.date_hierarchy,
+                self.search_fields, self.list_select_related,
+                self.list_per_page, self.list_max_show_all, self.list_editable,
+                self)
         except IncorrectLookupParameters:
             # Wacky lookup parameters were given, so redirect to the main
             # changelist page, without parameters, and pass an 'invalid=1'

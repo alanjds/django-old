@@ -124,12 +124,19 @@ to work similarly to how desktop GUIs do it. The new hook
 :meth:`~django.contrib.admin.ModelAdmin.get_ordering` for specifying the
 ordering dynamically (e.g. depending on the request) has also been added.
 
-``ModelAdmin.save_related()``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+New ``ModelAdmin`` methods
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-A new :meth:`~django.contrib.admin.ModelAdmin.save_related` hook was added to
+A new :meth:`~django.contrib.admin.ModelAdmin.save_related` method was added to
 :mod:`~django.contrib.admin.ModelAdmin` to ease the customization of how
 related objects are saved in the admin.
+
+Two other new methods,
+:meth:`~django.contrib.admin.ModelAdmin.get_list_display` and
+:meth:`~django.contrib.admin.ModelAdmin.get_list_display_links`
+were added to :class:`~django.contrib.admin.ModelAdmin` to enable the dynamic
+customization of fields and links to display on the admin
+change list.
 
 Admin inlines respect user permissions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -736,6 +743,16 @@ you can easily achieve the same by overriding the `open` method, e.g.::
         def open(self, name, mode='rb'):
             return Spam(open(self.path(name), mode))
 
+YAML deserializer now uses ``yaml.safe_load``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``yaml.load`` is able to construct any Python object, which may trigger
+arbitrary code execution if you process a YAML document that comes from an
+untrusted source. This feature isn't necessary for Django's YAML deserializer,
+whose primary use is to load fixtures consisting of simple objects. Even though
+fixtures are trusted data, for additional security, the YAML deserializer now
+uses ``yaml.safe_load``.
+
 .. _deprecated-features-1.4:
 
 Features deprecated in 1.4
@@ -847,3 +864,26 @@ calls ``setup_environ``, which is now deprecated. ``execute_manager`` is also
 deprecated; ``execute_from_command_line`` can be used instead. (Neither of
 these functions is documented public API, but a deprecation path is needed due
 to use in existing ``manage.py`` files.)
+
+``is_safe`` and ``needs_autoescape`` attributes of template filters
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Two flags, ``is_safe`` and ``needs_autoescape``, define how each template filter
+interacts with Django's auto-escaping behavior. They used to be attributes of
+the filter function::
+
+    @register.filter
+    def noop(value):
+        return value
+    noop.is_safe = True
+
+However, this technique caused some problems in combination with decorators,
+especially :func:`@stringfilter <django.template.defaultfilters.stringfilter>`.
+Now, the flags are keyword arguments of :meth:`@register.filter
+<django.template.Library.filter>`::
+
+    @register.filter(is_safe=True)
+    def noop(value):
+        return value
+
+See :ref:`filters and auto-escaping <filters-auto-escaping>` for more information.

@@ -9,10 +9,9 @@ from django.utils.formats import number_format
 from django.utils.translation import pgettext, ungettext, ugettext as _
 from django.utils.tzinfo import LocalTimezone
 
-
 register = template.Library()
 
-
+@register.filter(is_safe=True)
 def ordinal(value):
     """
     Converts an integer to its ordinal as a string. 1 is '1st', 2 is '2nd',
@@ -26,9 +25,8 @@ def ordinal(value):
     if value % 100 in (11, 12, 13): # special case
         return u"%d%s" % (value, suffixes[0])
     return u"%d%s" % (value, suffixes[value % 10])
-ordinal.is_safe = True
-register.filter(ordinal)
 
+@register.filter(is_safe=True)
 def intcomma(value, use_l10n=True):
     """
     Converts an integer to a string containing commas every three digits.
@@ -48,8 +46,6 @@ def intcomma(value, use_l10n=True):
         return new
     else:
         return intcomma(new, use_l10n)
-intcomma.is_safe = True
-register.filter(intcomma)
 
 # A tuple of standard large number to their converters
 intword_converters = (
@@ -99,6 +95,7 @@ intword_converters = (
     )),
 )
 
+@register.filter(is_safe=False)
 def intword(value):
     """
     Converts a large integer to a friendly text representation. Works best
@@ -130,9 +127,8 @@ def intword(value):
             new_value = value / float(large_number)
             return _check_for_i18n(new_value, *converters(new_value))
     return value
-intword.is_safe = False
-register.filter(intword)
 
+@register.filter(is_safe=True)
 def apnumber(value):
     """
     For numbers 1-9, returns the number spelled out. Otherwise, returns the
@@ -145,8 +141,6 @@ def apnumber(value):
     if not 0 < value < 10:
         return value
     return (_('one'), _('two'), _('three'), _('four'), _('five'), _('six'), _('seven'), _('eight'), _('nine'))[value-1]
-apnumber.is_safe = True
-register.filter(apnumber)
 
 @register.filter
 def naturalday(value, arg=None):

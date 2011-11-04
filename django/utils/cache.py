@@ -158,7 +158,7 @@ def has_vary_header(response, header_query):
 
 def _i18n_cache_key_suffix(request, cache_key):
     """If enabled, returns the cache key ending with a locale."""
-    if settings.USE_I18N:
+    if settings.USE_I18N or settings.USE_L10N:
         # first check if LocaleMiddleware or another middleware added
         # LANGUAGE_CODE to request, then fall back to the active language
         # which in turn can also fall back to settings.LANGUAGE_CODE
@@ -174,7 +174,7 @@ def _generate_cache_key(request, method, headerlist, key_prefix):
             ctx.update(value)
     path = hashlib.md5(iri_to_uri(request.get_full_path()))
     cache_key = 'views.decorators.cache.cache_page.%s.%s.%s.%s' % (
-        key_prefix, request.method, path.hexdigest(), ctx.hexdigest())
+        key_prefix, method, path.hexdigest(), ctx.hexdigest())
     return _i18n_cache_key_suffix(request, cache_key)
 
 def _generate_cache_header_key(key_prefix, request):

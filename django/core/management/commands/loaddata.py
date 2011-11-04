@@ -39,6 +39,12 @@ class Command(BaseCommand):
         connection = connections[using]
         self.style = no_style()
 
+        if not len(fixture_labels):
+            self.stderr.write(
+                self.style.ERROR("No database fixture specified. Please provide the path of at least one fixture in the command line.\n")
+            )
+            return
+
         verbosity = int(options.get('verbosity'))
         show_traceback = options.get('traceback')
 
@@ -56,7 +62,7 @@ class Command(BaseCommand):
         fixture_object_count = 0
         models = set()
 
-        humanize = lambda dirname: dirname and "'%s'" % dirname or 'absolute path'
+        humanize = lambda dirname: "'%s'" % dirname if dirname else 'absolute path'
 
         # Get a cursor (even though we don't need one yet). This has
         # the side effect of initializing the test database (if
@@ -154,6 +160,11 @@ class Command(BaseCommand):
                     open_method = compression_types[compression_format]
                     try:
                         fixture = open_method(full_path, 'r')
+                    except IOError:
+                        if verbosity >= 2:
+                            self.stdout.write("No %s fixture '%s' in %s.\n" % \
+                                (format, fixture_name, humanize(fixture_dir)))
+                    else:
                         if label_found:
                             fixture.close()
                             self.stderr.write(self.style.ERROR("Multiple fixtures named '%s' in %s. Aborting.\n" %
@@ -226,11 +237,6 @@ class Command(BaseCommand):
                                     transaction.leave_transaction_management(using=using)
                                 return
 
-                    except Exception, e:
-                        if verbosity >= 2:
-                            self.stdout.write("No %s fixture '%s' in %s.\n" % \
-                                (format, fixture_name, humanize(fixture_dir)))
-
         # If we found even one object in a fixture, we need to reset the
         # database sequences.
         if loaded_object_count > 0:
@@ -245,17 +251,13 @@ class Command(BaseCommand):
             transaction.commit(using=using)
             transaction.leave_transaction_management(using=using)
 
-        if fixture_object_count == 0:
-            if verbosity >= 1:
-                self.stdout.write("No fixtures found.\n")
-        else:
-            if verbosity >= 1:
-                if fixture_object_count == loaded_object_count:
-                    self.stdout.write("Installed %d object(s) from %d fixture(s)\n" % (
-                        loaded_object_count, fixture_count))
-                else:
-                    self.stdout.write("Installed %d object(s) (of %d) from %d fixture(s)\n" % (
-                        loaded_object_count, fixture_object_count, fixture_count))
+        if verbosity >= 1:
+            if fixture_object_count == loaded_object_count:
+                self.stdout.write("Installed %d object(s) from %d fixture(s)\n" % (
+                    loaded_object_count, fixture_count))
+            else:
+                self.stdout.write("Installed %d object(s) (of %d) from %d fixture(s)\n" % (
+                    loaded_object_count, fixture_object_count, fixture_count))
 
         # Close the DB connection. This is required as a workaround for an
         # edge case in MySQL: if the same connection is used to

@@ -109,6 +109,7 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         self.introspection = DatabaseIntrospection(self)
         self.validation = BaseDatabaseValidation(self)
         self._pg_version = None
+        self._named_cursor_idx = 0
 
     def check_constraints(self, table_names=None):
         """
@@ -142,7 +143,7 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         return self._pg_version
     pg_version = property(_get_pg_version)
 
-    def _cursor(self):
+    def _cursor(self, name=None):
         new_connection = False
         set_tz = False
         settings_dict = self.settings_dict
@@ -170,13 +171,22 @@ class DatabaseWrapper(BaseDatabaseWrapper):
             self.connection.set_client_encoding('UTF8')
             self.connection.set_isolation_level(self.isolation_level)
             connection_created.send(sender=self.__class__, connection=self)
-        cursor = self.connection.cursor()
+        if name:
+            cursor = self.connection.cursor(name)
+        else:
+            cursor = self.connection.cursor()
         cursor.tzinfo_factory = None
         if new_connection:
             if set_tz:
-                cursor.execute("SET TIME ZONE %s", [settings_dict['TIME_ZONE']])
+                # Note that we can't use the above cursor if it happens to be
+                # a named cursor - using a named cursor for SET is not valid.
+                self.cursor().execute("SET TIME ZONE %s", [settings_dict['TIME_ZONE']])
             self._get_pg_version()
         return CursorWrapper(cursor)
+
+    def chunked_cursor(self):
+        self._named_cursor_idx += 1
+        return self._cursor(name='_django_curs_%d' % self._named_cursor_idx)
 
     def _enter_transaction_management(self, managed):
         """

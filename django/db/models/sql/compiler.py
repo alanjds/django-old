@@ -751,8 +751,10 @@ class SQLCompiler(object):
                 return empty_iter()
             else:
                 return
-
-        cursor = self.connection.cursor()
+        if self.query.chunked_fetch:
+            cursor = self.connection.chunked_cursor()
+        else:
+            cursor = self.connection.cursor()
         cursor.execute(sql, params)
 
         if not result_type:
@@ -769,10 +771,12 @@ class SQLCompiler(object):
         else:
             result = iter((lambda: cursor.fetchmany(GET_ITERATOR_CHUNK_SIZE)),
                     self.connection.features.empty_fetchmany_value)
-        if not self.connection.features.can_use_chunked_reads:
+        if (not self.connection.features.has_safe_chunked_reads
+            and not self.query.chunked_fetch):
             # If we are using non-chunked reads, we return the same data
             # structure as normally, but ensure it is all read into memory
-            # before going any further.
+            # before going any further. If the user requests chunked_fetch
+            # we will honor that.
             return list(result)
         return result
 

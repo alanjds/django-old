@@ -312,6 +312,18 @@ class QuerySet(object):
                     setattr(obj, aggregate, row[i+aggregate_start])
 
             yield obj
+ 
+    def chunked(self):
+        """
+        Returns an iterator which will try to avoid all possible caching in
+        both the query class and in the db backend. This can mean for example
+        using named cursors when using PostgreSQL.
+        """
+        assert not self._prefetch_related_lookups, \
+               "Prefetch related will no-worky with chunked"
+        clone = self._clone()
+        clone.query.chunked_fetch = True
+        return clone.iterator()
 
     def aggregate(self, *args, **kwargs):
         """

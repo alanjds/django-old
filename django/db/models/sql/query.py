@@ -66,7 +66,7 @@ class RawQuery(object):
         # Always execute a new query for a new iterator.
         # This could be optimized with a cache at the expense of RAM.
         self._execute_query()
-        if not connections[self.using].features.can_use_chunked_reads:
+        if not connections[self.using].features.has_safe_chunked_reads:
             # If the database can't use chunked reads we need to make sure we
             # evaluate the entire query up front.
             result = list(self.cursor)
@@ -153,6 +153,7 @@ class Query(object):
         # are the fields to defer, or False if these are the only fields to
         # load.
         self.deferred_loading = (set(), True)
+        self.chunked_fetch = False
 
     def __str__(self):
         """
@@ -297,6 +298,7 @@ class Query(object):
         else:
             obj.used_aliases = set()
         obj.filter_is_sticky = False
+        obj.chunked_fetch = self.chunked_fetch
         obj.__dict__.update(kwargs)
         if hasattr(obj, '_setup_query'):
             obj._setup_query()

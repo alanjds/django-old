@@ -53,7 +53,7 @@ class DatabaseFeatures(BaseDatabaseFeatures):
     # and then writing the same rows to the database in another cursor. This
     # setting ensures we always read result sets fully into memory all in one
     # go.
-    can_use_chunked_reads = False
+    has_safe_chunked_reads = False
     test_db_allows_multiple_connections = False
     supports_unspecified_pk = True
     supports_1000_query_parameters = False

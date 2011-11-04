@@ -280,6 +280,12 @@ class BaseDatabaseWrapper(local):
             cursor = util.CursorWrapper(self._cursor(), self)
         return cursor
 
+    def chunked_cursor(self):
+        """
+        Returns a cursor which will try to avoid caching in the backend.
+        """
+        return self.cursor()
+
     def make_debug_cursor(self, cursor):
         return util.CursorDebugWrapper(cursor, self)
 
@@ -298,7 +304,7 @@ class BaseDatabaseFeatures(object):
     # constraint exists, but one of the unique_together columns is NULL?
     ignores_nulls_in_unique_constraints = True
 
-    can_use_chunked_reads = True
+    has_safe_chunked_reads = True
     can_return_id_from_insert = False
     has_bulk_insert = False
     uses_autocommit = False
@@ -353,6 +359,7 @@ class BaseDatabaseFeatures(object):
     requires_explicit_null_ordering_when_grouping = False
 
     # Is there a 1000 item limit on query parameters?
+    # TODO: maybe it would be better to have query_parameter_limit = N...
     supports_1000_query_parameters = True
 
     # Can an object have a primary key of 0? MySQL says No.

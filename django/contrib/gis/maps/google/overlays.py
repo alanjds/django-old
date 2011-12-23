@@ -3,13 +3,14 @@ from django.contrib.gis.geos import fromstr, Point, LineString, LinearRing, Poly
 
 class GEvent(object):
     """
-    A Python wrapper for the Google GEvent object.
+    A Python wrapper for wiring map events using the
+    google.maps.event.addListener() function.
 
     Events can be attached to any object derived from GOverlayBase with the
     add_event() call.
 
     For more information please see the Google Maps API Reference:
-     http://code.google.com/apis/maps/documentation/reference.html#GEvent
+     http://code.google.com/apis/maps/documentation/javascript/reference.html#event
 
     Example:
 
@@ -50,34 +51,40 @@ class GEvent(object):
         return mark_safe('"%s", %s' %(self.event, self.action))
 
 class GOverlayBase(object):
+
+    JS_CLASSNAME = 'Overlay'
+
     def __init__(self):
         self.events = []
 
     def latlng_from_coords(self, coords):
-        "Generates a JavaScript array of GLatLng objects for the given coordinates."
-        return '[%s]' % ','.join(['new GLatLng(%s,%s)' % (y, x) for x, y in coords])
+        "Generates a JavaScript array of google.maps.LatLng objects for the given coordinates."
+        return '[%s]' % ','.join(['new google.maps.LatLng(%s,%s)' % (y, x) for x, y in coords])
 
     def add_event(self, event):
-        "Attaches a GEvent to the overlay object."
+        "Causes the event to be applied to the overlay object"
         self.events.append(event)
 
     def __unicode__(self):
         "The string representation is the JavaScript API call."
-        return mark_safe('%s(%s)' % (self.__class__.__name__, self.js_params))
+        return mark_safe('google.maps.%s(%s)' % (self.JS_CLASSNAME, self.js_params))
 
 class GPolygon(GOverlayBase):
     """
-    A Python wrapper for the Google GPolygon object.  For more information
+    A Python wrapper for the google.maps.Polygon object.  For more information
     please see the Google Maps API Reference:
-     http://code.google.com/apis/maps/documentation/reference.html#GPolygon
+     http://code.google.com/apis/maps/documentation/javascript/reference.html#Polygon
     """
+
+    JS_CLASSNAME = 'Polygon'
+
     def __init__(self, poly,
                  stroke_color='#0000ff', stroke_weight=2, stroke_opacity=1,
                  fill_color='#0000ff', fill_opacity=0.4):
         """
-        The GPolygon object initializes on a GEOS Polygon or a parameter that
-        may be instantiated into GEOS Polygon.  Please note that this will not
-        depict a Polygon's internal rings.
+        The GPolygon object initializes on a GEOS Polygon or a
+        parameter that may be instantiated into GEOS Polygon.  Please note
+        that this will not depict a Polygon's internal rings.
 
         Keyword Options:
 
@@ -119,15 +126,24 @@ class GPolygon(GOverlayBase):
 
     @property
     def js_params(self):
-        return '%s, "%s", %s, %s, "%s", %s' % (self.points, self.stroke_color, self.stroke_weight, self.stroke_opacity,
-                                               self.fill_color, self.fill_opacity)
+        result = []
+        result.append('paths: %s' % self.points)
+        if self.stroke_color: result.append('strokeColor: "%s"' % self.stroke_color)
+        if self.stroke_weight: result.append('strokeWeight: "%s"' % self.stroke_weight)
+        if self.stroke_opacity: result.append('strokeOpacity: "%s"' % self.stroke_opacity)
+        if self.fill_color: result.append('fillColor: "%s"' % self.fill_color)
+        if self.fill_opacity: result.append('fillOpactiy: "%s"' % self.fill_opacity)
+        return '{%s}' % ','.join(result)
 
 class GPolyline(GOverlayBase):
     """
-    A Python wrapper for the Google GPolyline object.  For more information
+    A Python wrapper for the google.maps.Polyline object.  For more information
     please see the Google Maps API Reference:
-     http://code.google.com/apis/maps/documentation/reference.html#GPolyline
+     http://code.google.com/apis/maps/documentation/javascript/reference.html#Polyline
     """
+
+    JS_CLASSNAME = 'Polyline'
+
     def __init__(self, geom, color='#0000ff', weight=2, opacity=1):
         """
         The GPolyline object may be initialized on GEOS LineStirng, LinearRing,
@@ -163,87 +179,81 @@ class GPolyline(GOverlayBase):
 
     @property
     def js_params(self):
-        return '%s, "%s", %s, %s' % (self.latlngs, self.color, self.weight, self.opacity)
+        result = []
+        result.append('path: %s' % self.latlngs)
+        if self.color: result.append('strokeColor: "%s"' % self.color)
+        if self.weight: result.append('strokeWeight: "%s"' % self.weight)
+        if self.opacity: result.append('strokeOpacity: "%s"' % self.opacity)
+        return '{%s}' % ','.join(result)
 
 
-class GIcon(object):
+class GImage(object):
     """
-    Creates a GIcon object to pass into a Gmarker object.
+    Creates a GImage object to pass into a Gmarker object for the icon
+    and shadow arguments.  The arguments are used to create a MarkerImage
+    class in the javascript:
 
-    The keyword arguments map to instance attributes of the same name. These,
-    in turn, correspond to a subset of the attributes of the official GIcon
-    javascript object:
-
-    http://code.google.com/apis/maps/documentation/reference.html#GIcon
-
-    Because a Google map often uses several different icons, a name field has
-    been added to the required arguments.
+    http://code.google.com/apis/maps/documentation/javascript/reference.html#MarkerImage
 
     Required Arguments:
-        varname:
-            A string which will become the basis for the js variable name of
-            the marker, for this reason, your code should assign a unique
-            name for each GIcon you instantiate, otherwise there will be
-            name space collisions in your javascript.
+
+        url:
+            The url of the image to be used as the icon on the map
 
     Keyword Options:
-        image:
-            The url of the image to be used as the icon on the map defaults
-            to 'G_DEFAULT_ICON'
 
-        iconsize:
+        size:
             a tuple representing the pixel size of the foreground (not the
             shadow) image of the icon, in the format: (width, height) ex.:
 
-            GIcon('fast_food',
-                  image="/media/icon/star.png",
+            GImage("/media/icon/star.png",
                   iconsize=(15,10))
 
             Would indicate your custom icon was 15px wide and 10px height.
 
-        shadow:
-            the url of the image of the icon's shadow
+        origin:
+            a tuple representing the pixel coordinate of the upper left corner
+            of the icon.  Used in conjuction with the size option to specify
+            the sprite/subset of an image.  In the format: (x,y) ex.:
 
-        shadowsize:
-            a tuple representing the pixel size of the shadow image, format is
-            the same as ``iconsize``
+            3rd_marker = GImage("/media/icon/12_markers.png",
+                               size=(15,10),
+                               origin=(30,0))
 
-        iconanchor:
+            Would indicate the image where it's upper left corner is at (30,0)
+            and its lower right corner is (45,10).
+
+        anchor:
             a tuple representing the pixel coordinate relative to the top left
             corner of the icon image at which this icon is anchored to the map.
             In (x, y) format.  x increases to the right in the Google Maps
             coordinate system and y increases downwards in the Google Maps
             coordinate system.)
 
-        infowindowanchor:
-            The pixel coordinate relative to the top left corner of the icon
-            image at which the info window is anchored to this icon.
-
     """
-    def __init__(self, varname, image=None, iconsize=None,
-                 shadow=None, shadowsize=None, iconanchor=None,
-                 infowindowanchor=None):
-        self.varname = varname
-        self.image = image
-        self.iconsize = iconsize
-        self.shadow = shadow
-        self.shadowsize = shadowsize
-        self.iconanchor = iconanchor
-        self.infowindowanchor = infowindowanchor
 
-    def __cmp__(self, other):
-        return cmp(self.varname, other.varname)
-    
-    def __hash__(self):
-        # XOR with hash of GIcon type so that hash('varname') won't 
-        # equal hash(GIcon('varname')).
-        return hash(self.__class__) ^ hash(self.varname)
+    def __init__(self, url, size=None, origin=None, anchor=None):
+        self.url = url
+        self.size = size
+        self.origin = origin
+        self.anchor = anchor
+
+    def _to_param(self):
+        args = "(%s" % self.url
+        if self.size:
+            args += ", new google.maps.Size(%s)" % self.size
+            if self.origin:
+                args += ", new google.maps.Point(%s)" % self.origin
+                if self.anchor:
+                    args += ", new google.maps.Point(%s)" % self.anchor
+        args += ")"
+        return "new google.maps.MarkerImage(%s)" % args
 
 class GMarker(GOverlayBase):
     """
     A Python wrapper for the Google GMarker object.  For more information
     please see the Google Maps API Reference:
-     http://code.google.com/apis/maps/documentation/reference.html#GMarker
+     http://code.google.com/apis/maps/documentation/javascript/reference.html#Marker
 
     Example:
 
@@ -258,11 +268,13 @@ class GMarker(GOverlayBase):
           return render_to_response('mytemplate.html',
                  {'google' : GoogleMap(markers=[marker])})
     """
-    def __init__(self, geom, title=None, draggable=False, icon=None):
+
+    JS_CLASSNAME = 'Marker'
+
+    def __init__(self, geom, title=None, draggable=False, icon=None, shadow=None, visible=True):
         """
         The GMarker object may initialize on GEOS Points or a parameter
-        that may be instantiated into a GEOS point.  Keyword options map to
-        GMarkerOptions -- so far only the title option is supported.
+        that may be instantiated into a GEOS point.
 
         Keyword Options:
          title:
@@ -270,6 +282,16 @@ class GMarker(GOverlayBase):
 
          draggable:
            Draggable option for GMarker, disabled by default.
+
+         icon:
+           Sets the GImage used to display the marker on the map.
+           If not set google maps will use the default marker icon.
+
+         shadow:
+           Sets the GImage used to display the shadow of the marker on the map.
+
+         visible:
+           Set if this marker will be visible at the map
         """
         # If a GEOS geometry isn't passed in, try to construct one.
         if isinstance(geom, basestring): geom = fromstr(geom)
@@ -284,18 +306,20 @@ class GMarker(GOverlayBase):
         self.title = title
         self.draggable = draggable
         self.icon = icon
+        self.shadow = shadow
+        self.visible = visible
         super(GMarker, self).__init__()
 
     def latlng_from_coords(self, coords):
-        return 'new GLatLng(%s,%s)' %(coords[1], coords[0])
-
-    def options(self):
-        result = []
-        if self.title: result.append('title: "%s"' % self.title)
-        if self.icon: result.append('icon: %s' % self.icon.varname)
-        if self.draggable: result.append('draggable: true')
-        return '{%s}' % ','.join(result)
+        return 'new google.maps.LatLng(%s,%s)' %(coords[1], coords[0])
 
     @property
     def js_params(self):
-        return '%s, %s' % (self.latlng, self.options())
+        result = []
+        result.append('position: %s' % self.latlng)
+        if self.title: result.append('title: "%s"' % self.title)
+        if self.icon: result.append('icon: %s' % self.icon._to_param())
+        if self.shadow: result.append('shadow: %s' % self.shadow_to_param())
+        if self.draggable: result.append('draggable: true')
+        if not self.visible: result.append('visible: false')
+        return '{%s}' % ','.join(result)

@@ -2,50 +2,37 @@ from django.conf import settings
 from django.contrib.gis import geos
 from django.template.loader import render_to_string
 from django.utils.safestring import mark_safe
+from django.utils import simplejson as json
 
 class GoogleMapException(Exception): pass
-from django.contrib.gis.maps.google.overlays import GPolygon, GPolyline, GMarker, GIcon
+from django.contrib.gis.maps.google.overlays import GPolygon, GPolyline, GMarker, GImage
 
 # The default Google Maps URL (for the API javascript)
 # TODO: Internationalize for Japan, UK, etc.
-GOOGLE_MAPS_URL='http://maps.google.com/maps?file=api&amp;v=%s&amp;key='
+GOOGLE_MAPS_URL='http://maps.google.com/maps/api/js?sensor=%s'
 
 class GoogleMap(object):
     "A class for generating Google Maps JavaScript."
 
     # String constants
-    onunload = mark_safe('onunload="GUnload()"') # Cleans up after Google Maps
+    onunload = mark_safe('') # NOTE: Used to call GUnload, but google maps v3 doesn't need it so now blank
     vml_css  = mark_safe('v\:* {behavior:url(#default#VML);}') # CSS for IE VML
     xmlns    = mark_safe('xmlns:v="urn:schemas-microsoft-com:vml"') # XML Namespace (for IE VML).
 
-    def __init__(self, key=None, api_url=None, version=None,
-                 center=None, zoom=None, dom_id='map',
+    def __init__(self, api_url=None, center=None, zoom=None, dom_id='map',
                  kml_urls=[], polylines=None, polygons=None, markers=None,
+                 using_sensor=False, min_zoom=None, max_zoom=None, keyboard_shortcuts=True,
+                 street_view_control=True, overview_map_control=False, pan_control=False,
+                 disable_double_click_zoom=False,
                  template='gis/google/google-map.js',
                  js_module='geodjango',
                  extra_context={}):
 
-        # The Google Maps API Key defined in the settings will be used
-        # if not passed in as a parameter.  The use of an API key is
-        # _required_.
-        if not key:
-            try:
-                self.key = settings.GOOGLE_MAPS_API_KEY
-            except AttributeError:
-                raise GoogleMapException('Google Maps API Key not found (try adding GOOGLE_MAPS_API_KEY to your settings).')
-        else:
-            self.key = key
-
-        # Getting the Google Maps API version, defaults to using the latest ("2.x"),
-        # this is not necessarily the most stable.
-        if not version:
-            self.version = getattr(settings, 'GOOGLE_MAPS_API_VERSION', '2.x')
-        else:
-            self.version = version
-
         # Can specify the API URL in the `api_url` keyword.
         if not api_url:
-            self.api_url = mark_safe(getattr(settings, 'GOOGLE_MAPS_URL', GOOGLE_MAPS_URL) % self.version)
+            sensor_value = 'false' # maps v3 needs to know if the device rendering the page has a gps sensor
+            if using_sensor: sensor_value = 'true'
+            self.api_url = mark_safe(getattr(settings, 'GOOGLE_MAPS_URL', GOOGLE_MAPS_URL) % sensor_value)
         else:
             self.api_url = api_url
 
@@ -56,6 +43,13 @@ class GoogleMap(object):
         self.js_module = js_module
         self.template = template
         self.kml_urls = kml_urls
+        self.min_zoom = min_zoom
+        self.max_zoom = max_zoom
+        self.keyboard_shortcuts = keyboard_shortcuts
+        self.street_view_control = street_view_control
+        self.overview_map_control = overview_map_control
+        self.pan_control = pan_control
+        self.disable_double_click_zoom = disable_double_click_zoom
 
         # Does the user want any GMarker, GPolygon, and/or GPolyline overlays?
         overlay_info = [[GMarker, markers, 'markers'],
@@ -97,10 +91,17 @@ class GoogleMap(object):
                   'js_module' : self.js_module,
                   'kml_urls' : self.kml_urls,
                   'zoom' : self.zoom,
+                  'min_zoom': self.min_zoom,
+                  'max_zoom': self.max_zoom,
+                  'keyboard_shortcuts': json.dumps(self.keyboard_shortcuts),
                   'polygons' : self.polygons,
                   'polylines' : self.polylines,
                   'icons': self.icons,
                   'markers' : self.markers,
+                  'street_view_control': json.dumps(self.street_view_control),
+                  'overview_map_control': self.overview_map_control,
+                  'pan_control': self.pan_control,
+                  'disable_double_click_zoom': self.disable_double_click_zoom,
                   }
         params.update(self.extra_context)
         return render_to_string(self.template, params)
@@ -118,7 +119,7 @@ class GoogleMap(object):
     @property
     def api_script(self):
         "Returns the <script> tag for the Google Maps API javascript."
-        return mark_safe('<script src="%s%s" type="text/javascript"></script>' % (self.api_url, self.key))
+        return mark_safe('<script src="%s" type="text/javascript"></script>' % self.api_url)
 
     @property
     def js(self):
@@ -142,7 +143,7 @@ class GoogleMap(object):
 
     @property
     def icons(self):
-        "Returns a sequence of GIcon objects in this map."
+        "Returns a sequence of GImage objects in this map."
         return set([marker.icon for marker in self.markers if marker.icon])
 
 class GoogleMapSet(GoogleMap):
